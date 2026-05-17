@@ -5,6 +5,8 @@ import {
   Loader2, Calculator, Play, ChevronRight, GraduationCap,
   Sigma, Type, Image as ImageIcon
 } from 'lucide-react';
+
+// EXACTLY ONE SET OF FIREBASE IMPORTS
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 import { getFirestore, collection, doc, setDoc, onSnapshot, addDoc, updateDoc } from "firebase/firestore";
@@ -23,13 +25,10 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const appId = 'default-app-id';
 
 // --- API & Utility Functions ---
-
-
-// --- API & Utility Functions ---
-const apiKey = ""; // Injected by the environment
+const apiKey = "AIzaSyCaUKSQudmkNy2PfSqalIvG4Uj7KQHpfdI"; // <--- PASTE YOUR GEMINI KEY HERE
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -93,7 +92,7 @@ const extractImagesFromPDF = async (file) => {
   
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
-    const viewport = page.getViewport({ scale: 1.5 }); // Scale 1.5 for a balance of quality and size
+    const viewport = page.getViewport({ scale: 1.5 });
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     canvas.height = viewport.height;
@@ -125,7 +124,6 @@ const cropImage = (dataUrl, box) => {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       
-      // Add a small 2% padding around the bounding box
       const padding = 2;
       let xmin = Math.max(0, box.xmin - padding);
       let xmax = Math.min(100, box.xmax + padding);
@@ -156,7 +154,6 @@ const parseStudentHtmlToText = (html) => {
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
   
-  // Extract all inline math fields and replace them with text latex for AI grading
   const mathFields = doc.querySelectorAll('math-field');
   mathFields.forEach(mf => {
     const latex = mf.getAttribute('value') || '';
@@ -193,24 +190,20 @@ const MathText = ({ text, className }) => {
   return <div ref={containerRef} className={className} style={{ whiteSpace: 'pre-wrap' }}>{text}</div>;
 };
 
-// A unified box that handles both normal text typing and inline math equations
 const HybridEditor = ({ value, onChange }) => {
   const editorRef = useRef(null);
 
-  // Initialize value once
   useEffect(() => {
     if (editorRef.current && !editorRef.current.innerHTML && value) {
       editorRef.current.innerHTML = value;
     }
   }, []);
 
-  // Listen for text input AND math-field changes
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
 
     const handleEditorInput = (e) => {
-      // If a user types inside a math-field, sync its internal state to the HTML attribute
       if (e.target.tagName && e.target.tagName.toLowerCase() === 'math-field') {
         e.target.setAttribute('value', e.target.value);
       }
@@ -227,7 +220,6 @@ const HybridEditor = ({ value, onChange }) => {
     
     const selection = window.getSelection();
     
-    // Check if the cursor is actually inside our editor
     if (selection.rangeCount > 0 && editorRef.current.contains(selection.anchorNode)) {
       const range = selection.getRangeAt(0);
       range.deleteContents();
@@ -241,7 +233,6 @@ const HybridEditor = ({ value, onChange }) => {
       selection.removeAllRanges();
       selection.addRange(range);
     } else {
-      // Fallback: append at the end
       editorRef.current.appendChild(mf);
       editorRef.current.appendChild(document.createTextNode('\u00A0'));
     }
@@ -275,13 +266,10 @@ const HybridEditor = ({ value, onChange }) => {
   );
 };
 
-
-// --- Main Application Component ---
 export default function App() {
   const [activeTab, setActiveTab] = useState('setup');
   const [user, setUser] = useState(null);
   
-  // Setup Data
   const [questionsImages, setQuestionsImages] = useState([]);
   const [answerKeyText, setAnswerKeyText] = useState('');
   const [extractedQuestions, setExtractedQuestions] = useState([]);
@@ -289,22 +277,19 @@ export default function App() {
   const [setupPhase, setSetupPhase] = useState(1);
   const [quizConfig, setQuizConfig] = useState(null);
 
-  // Student Portal
-  const [currentResponses, setCurrentResponses] = useState({}); // Maps part.id -> html string
+  const [currentResponses, setCurrentResponses] = useState({});
   const [hasSubmitted, setHasSubmitted] = useState(false);
 
-  // Results & Grading
   const [submissions, setSubmissions] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStatus, setProcessingStatus] = useState('');
 
-  // Firebase Auth & Data Sync
   useEffect(() => {
     const initAuth = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else {
+      try {
         await signInAnonymously(auth);
+      } catch (err) {
+        console.error("Auth init failed", err);
       }
     };
     initAuth();
@@ -316,7 +301,6 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     
-    // Sync Quiz Config from Cloud
     const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'main');
     const unsubConfig = onSnapshot(configRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -325,7 +309,6 @@ export default function App() {
       }
     }, (err) => console.error("Config sync error:", err));
 
-    // Sync Student Submissions from Cloud
     const subsRef = collection(db, 'artifacts', appId, 'public', 'data', 'submissions');
     const unsubSubs = onSnapshot(subsRef, (snap) => {
       const loaded = [];
@@ -356,9 +339,7 @@ export default function App() {
     setCurrentResponses({});
   };
 
-  // Load external libraries
   useEffect(() => {
-    // PDF.js
     const scriptPDF = document.createElement('script');
     scriptPDF.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js';
     scriptPDF.onload = () => {
@@ -366,7 +347,6 @@ export default function App() {
     };
     document.body.appendChild(scriptPDF);
 
-    // MathJax Config & Script
     window.MathJax = {
       tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
       startup: { typeset: false }
@@ -376,7 +356,6 @@ export default function App() {
     scriptMathJax.async = true;
     document.body.appendChild(scriptMathJax);
 
-    // MathLive (for student equation input)
     const scriptMathLive = document.createElement('script');
     scriptMathLive.type = 'module';
     scriptMathLive.src = 'https://unpkg.com/mathlive?module';
@@ -469,7 +448,6 @@ export default function App() {
 
       const result = await callGemini(prompt, schema, questionsImages);
       
-      // Safety check and crop figures
       const sanitizedQuestions = await Promise.all((result.questions || []).map(async q => {
         let finalQ = { ...q };
         if (!finalQ.parts || finalQ.parts.length === 0) {
@@ -489,7 +467,7 @@ export default function App() {
       setSetupPhase(2);
     } catch (err) {
       console.error(err);
-      alert("Failed to extract questions. Please try again.");
+      alert("Failed to extract questions. Please check your API key and try again.");
     } finally {
       setIsProcessing(false);
       setProcessingStatus('');
@@ -537,7 +515,6 @@ export default function App() {
     }
   };
 
-  // --- Handlers: Student Portal ---
   const handleStudentSubmit = async () => {
     if (!user?.email) {
       alert("Please sign in to submit your assessment.");
@@ -568,7 +545,6 @@ export default function App() {
     setHasSubmitted(false);
   };
 
-  // --- Handlers: Grading & Results ---
   const gradeAllSubmissions = async () => {
     const ungraded = submissions.filter(s => !s.graded);
     if (ungraded.length === 0) return;
@@ -699,8 +675,6 @@ export default function App() {
     document.body.removeChild(link);
   };
 
-
-  // --- Render Helpers ---
   const renderTabButton = (id, label, icon) => (
     <button
       onClick={() => setActiveTab(id)}
@@ -717,7 +691,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
-      {/* Header */}
       <header className="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-4">
           <div className="flex items-center justify-between h-16">
@@ -749,10 +722,8 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Content Area */}
       <main className="max-w-6xl mx-auto px-4 py-8">
         
-        {/* Loading Overlay */}
         {isProcessing && (
           <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50">
             <div className="bg-white p-6 rounded-2xl shadow-xl flex flex-col items-center max-w-sm w-full text-center">
@@ -763,7 +734,6 @@ export default function App() {
           </div>
         )}
 
-        {/* --- TAB 1: TEACHER SETUP --- */}
         {activeTab === 'setup' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
@@ -837,7 +807,6 @@ export default function App() {
                                 )}
                                 <MathText text={q.text} className="text-slate-800 mt-1 font-medium mb-3" />
                                 
-                                {/* Show Sub Parts */}
                                 {q.parts && q.parts.length > 0 && q.parts[0].label !== '' && (
                                   <div className="pl-4 border-l-2 border-slate-200 space-y-2 mt-2">
                                     {q.parts.map(p => (
@@ -934,7 +903,6 @@ export default function App() {
           </div>
         )}
 
-        {/* --- TAB 2: STUDENT PORTAL --- */}
         {activeTab === 'student' && (
           <div className="max-w-3xl mx-auto animate-in fade-in duration-500">
             {!quizConfig ? (
@@ -1015,7 +983,6 @@ export default function App() {
           </div>
         )}
 
-        {/* --- TAB 3: GRADING & RESULTS --- */}
         {activeTab === 'results' && (
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
@@ -1081,7 +1048,6 @@ export default function App() {
                                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2 block">
                                         Student Answer {p.label ? `(Part ${p.label})` : ''}
                                       </span>
-                                      {/* Read-only rendering of the hybrid editor HTML */}
                                       {studentHtml ? (
                                         <div 
                                           className="text-sm text-slate-800 leading-relaxed pointer-events-none" 

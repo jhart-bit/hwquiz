@@ -28,7 +28,7 @@ const db = getFirestore(app);
 const appId = 'default-app-id';
 
 // --- API & Utility Functions ---
-const apiKey = "AIzaSyCaUKSQudmkNy2PfSqalIvG4Uj7KQHpfdI"; // <--- PASTE YOUR GEMINI KEY HERE
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY; // <--- PASTE YOUR GEMINI KEY HERE
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 

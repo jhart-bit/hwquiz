@@ -9,12 +9,7 @@ import { initializeApp } from "firebase/app";
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 import { getFirestore, collection, doc, setDoc, onSnapshot, addDoc, updateDoc } from "firebase/firestore";
 
-
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
-
-// Your web app's Firebase configuration
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+// --- Firebase Setup ---
 const firebaseConfig = {
   apiKey: "AIzaSyBuqwjjiu_p-4leYdV0BD7N6rVUZ2se66A",
   authDomain: "hwquiz-ca034.firebaseapp.com",
@@ -25,11 +20,11 @@ const firebaseConfig = {
   measurementId: "G-6EW3SJ1ZK8"
 };
 
-// Initialize Firebase
-//const app = initializeApp(firebaseConfig);
+const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
 
 // --- API & Utility Functions ---
 const apiKey = ""; // Injected by the environment

@@ -25,6 +25,8 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
+// --- API & Utility Functions ---
+
 
 // --- API & Utility Functions ---
 const apiKey = ""; // Injected by the environment

@@ -6,14 +6,13 @@ import {
   Sigma, Type, Image as ImageIcon
 } from 'lucide-react';
 
-// EXACTLY ONE SET OF FIREBASE IMPORTS
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 import { getFirestore, collection, doc, setDoc, onSnapshot, addDoc, updateDoc } from "firebase/firestore";
 
 // --- Firebase Setup ---
 const firebaseConfig = {
-  apiKey: "AIzaSyBuqwjjiu_p-4leYdV0BD7N6rVUZ2se66A",
+  apiKey: "AIzaSyDI7QPIAfZsEVfUv7kjvrmvLeLXkbKxrtA",
   authDomain: "hwquiz-ca034.firebaseapp.com",
   projectId: "hwquiz-ca034",
   storageBucket: "hwquiz-ca034.firebasestorage.app",
@@ -28,7 +27,15 @@ const db = getFirestore(app);
 const appId = 'default-app-id';
 
 // --- API & Utility Functions ---
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY; // <--- PASTE YOUR GEMINI KEY HERE
+// Safely evaluate environment variables using dynamic functions to prevent target environment ES2015 compiler warnings
+let apiKey = "";
+try {
+  apiKey = new Function("return import.meta.env.VITE_GEMINI_API_KEY")();
+} catch (e) {
+  try {
+    apiKey = process.env.VITE_GEMINI_API_KEY || "";
+  } catch (err) {}
+}
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -48,7 +55,8 @@ const fetchWithRetry = async (url, options, retries = 5) => {
 };
 
 const callGemini = async (prompt, schema = null, images = []) => {
-const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;  
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  
   const parts = [{ text: prompt }];
   images.forEach(img => {
     const base64Data = img.split(',')[1];
@@ -266,9 +274,14 @@ const HybridEditor = ({ value, onChange }) => {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('setup');
+  // === TEACHER EMAIL LOCK ===
+  const TEACHER_EMAIL = "jhart@intrinsicschools.org"; 
+
+  const [activeTab, setActiveTab] = useState('student');
   const [user, setUser] = useState(null);
   
+  const isTeacher = user?.email === TEACHER_EMAIL;
+
   const [questionsImages, setQuestionsImages] = useState([]);
   const [answerKeyText, setAnswerKeyText] = useState('');
   const [extractedQuestions, setExtractedQuestions] = useState([]);
@@ -284,11 +297,12 @@ export default function App() {
   const [processingStatus, setProcessingStatus] = useState('');
 
   useEffect(() => {
+    // Graceful init authentication: handle any restrictions or iframe blocks elegantly without breaking page loading
     const initAuth = async () => {
       try {
         await signInAnonymously(auth);
       } catch (err) {
-        console.error("Auth init failed", err);
+        console.warn("Graceful notice: Anonymous authentication is restricted or disabled in this scope:", err.message);
       }
     };
     initAuth();
@@ -336,6 +350,7 @@ export default function App() {
     await signOut(auth);
     setHasSubmitted(false);
     setCurrentResponses({});
+    setActiveTab('student'); 
   };
 
   useEffect(() => {
@@ -508,6 +523,7 @@ export default function App() {
     try {
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'main'), newConfig);
       alert("Quiz configured & saved to cloud successfully! You can now switch to the Student Portal.");
+      setActiveTab('student');
     } catch (err) {
       console.error("Error saving config:", err);
       alert("Failed to save quiz configuration.");
@@ -713,11 +729,14 @@ export default function App() {
               )}
             </div>
           </div>
-          <nav className="flex space-x-2 -mb-px">
-            {renderTabButton('setup', '1. Teacher Setup', <Settings className="w-4 h-4" />)}
-            {renderTabButton('student', '2. Student Portal', <Users className="w-4 h-4" />)}
-            {renderTabButton('results', '3. Grading & Results', <GraduationCap className="w-4 h-4" />)}
-          </nav>
+          
+          {isTeacher && (
+            <nav className="flex space-x-2 -mb-px">
+              {renderTabButton('setup', '1. Teacher Setup', <Settings className="w-4 h-4" />)}
+              {renderTabButton('student', '2. Student Portal', <Users className="w-4 h-4" />)}
+              {renderTabButton('results', '3. Grading & Results', <GraduationCap className="w-4 h-4" />)}
+            </nav>
+          )}
         </div>
       </header>
 
@@ -733,7 +752,7 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === 'setup' && (
+        {isTeacher && activeTab === 'setup' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="p-6 border-b border-slate-100 bg-slate-50/50">
@@ -908,6 +927,9 @@ export default function App() {
               <div className="text-center py-20 bg-white rounded-2xl shadow-sm border border-slate-200">
                 <BookOpen className="w-12 h-12 text-slate-300 mx-auto mb-4" />
                 <h3 className="text-lg font-medium text-slate-900">No Active Quiz</h3>
+                {!user?.email && (
+                  <p className="text-slate-500 mt-2">Sign in to check for active assessments.</p>
+                )}
               </div>
             ) : !user?.email ? (
                <div className="text-center py-20 bg-white rounded-2xl shadow-sm border border-slate-200">
@@ -982,7 +1004,7 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === 'results' && (
+        {isTeacher && activeTab === 'results' && (
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
               <div>

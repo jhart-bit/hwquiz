@@ -27,7 +27,7 @@ const db = getFirestore(app);
 const appId = 'default-app-id';
 
 // --- API & Utility Functions ---
-// Safely evaluate environment variables using dynamic functions to prevent target environment ES2015 compiler warnings
+// Safely evaluate environment variables dynamically to prevent target environment ES2015 compiler warnings
 let apiKey = "";
 try {
   apiKey = new Function("return import.meta.env.VITE_GEMINI_API_KEY")();
@@ -297,7 +297,7 @@ export default function App() {
   const [processingStatus, setProcessingStatus] = useState('');
 
   useEffect(() => {
-    // Only use standard state listeners on initialization to allow popups to process normally without conflicts
+    // Rely strictly on active sign-in listeners. No background auth logic is initialized to ensure smooth Google Auth Popups.
     const unsubscribe = onAuthStateChanged(auth, setUser);
     return () => unsubscribe();
   }, []);

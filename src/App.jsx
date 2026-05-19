@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
-import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
+import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 import { getFirestore, collection, doc, setDoc, onSnapshot, addDoc, updateDoc } from "firebase/firestore";
 
 // --- Firebase Setup ---
@@ -297,16 +297,7 @@ export default function App() {
   const [processingStatus, setProcessingStatus] = useState('');
 
   useEffect(() => {
-    // Graceful init authentication: handle any restrictions or iframe blocks elegantly without breaking page loading
-    const initAuth = async () => {
-      try {
-        await signInAnonymously(auth);
-      } catch (err) {
-        console.warn("Graceful notice: Anonymous authentication is restricted or disabled in this scope:", err.message);
-      }
-    };
-    initAuth();
-    
+    // Only use standard state listeners on initialization to allow popups to process normally without conflicts
     const unsubscribe = onAuthStateChanged(auth, setUser);
     return () => unsubscribe();
   }, []);

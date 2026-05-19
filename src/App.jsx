@@ -7,7 +7,15 @@ import {
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
-import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
+import { 
+  getAuth, 
+  onAuthStateChanged, 
+  GoogleAuthProvider, 
+  signInWithPopup, 
+  signInWithRedirect,
+  getRedirectResult,
+  signOut 
+} from "firebase/auth";
 import { getFirestore, collection, doc, setDoc, onSnapshot, addDoc, updateDoc } from "firebase/firestore";
 
 // --- Firebase Setup ---
@@ -279,6 +287,7 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState('student');
   const [user, setUser] = useState(null);
+  const [authError, setAuthError] = useState(null);
   
   const isTeacher = user?.email === TEACHER_EMAIL;
 
@@ -297,8 +306,21 @@ export default function App() {
   const [processingStatus, setProcessingStatus] = useState('');
 
   useEffect(() => {
-    // Rely strictly on active sign-in listeners. No background auth logic is initialized to ensure smooth Google Auth Popups.
     const unsubscribe = onAuthStateChanged(auth, setUser);
+
+    // Capture the login result if the student was redirected back to the site
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result?.user) {
+          setUser(result.user);
+          setAuthError(null);
+        }
+      })
+      .catch((error) => {
+        console.error("Redirect auth error:", error);
+        setAuthError(`Redirect login failed: ${error.message}`);
+      });
+
     return () => unsubscribe();
   }, []);
 
@@ -329,11 +351,21 @@ export default function App() {
   }, [user]);
 
   const handleLogin = async () => {
+    setAuthError(null);
     const provider = new GoogleAuthProvider();
+    
     try {
+      // Step 1: Attempt normal popup login
       await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error("Login failed", error);
+    } catch (popupError) {
+      console.warn("Popup blocked or closed, falling back to clean page redirect...", popupError);
+      
+      // Step 2: Fallback to Redirect Sign In immediately (100% bypasses third-party cookie blocks)
+      try {
+        await signInWithRedirect(auth, provider);
+      } catch (redirectError) {
+        setAuthError(`Sign-in failed: ${redirectError.message}`);
+      }
     }
   };
 
@@ -733,6 +765,22 @@ export default function App() {
 
       <main className="max-w-6xl mx-auto px-4 py-8">
         
+        {authError && (
+          <div className="mb-6 bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-start gap-3 text-rose-800 animate-in fade-in slide-in-from-top-4">
+            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-600" />
+            <div>
+              <h4 className="font-semibold text-sm">Sign In Notice</h4>
+              <p className="text-xs mt-0.5 opacity-90">{authError}</p>
+              <button 
+                onClick={handleLogin} 
+                className="mt-2 text-xs font-bold text-indigo-600 hover:text-indigo-800 underline block"
+              >
+                Click here to try Redirect Method instead
+              </button>
+            </div>
+          </div>
+        )}
+
         {isProcessing && (
           <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50">
             <div className="bg-white p-6 rounded-2xl shadow-xl flex flex-col items-center max-w-sm w-full text-center">

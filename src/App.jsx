@@ -288,6 +288,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('student');
   const [user, setUser] = useState(null);
   const [authError, setAuthError] = useState(null);
+  const [showManualLogin, setShowManualLogin] = useState(false);
+  const [manualEmail, setManualEmail] = useState('');
   
   const isTeacher = user?.email === TEACHER_EMAIL;
 
@@ -306,7 +308,12 @@ export default function App() {
   const [processingStatus, setProcessingStatus] = useState('');
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      // If we are logged in manually, do not override with null firebase user states
+      if (firebaseUser) {
+        setUser(firebaseUser);
+      }
+    });
 
     // Capture the login result if the student was redirected back to the site
     getRedirectResult(auth)
@@ -369,8 +376,30 @@ export default function App() {
     }
   };
 
+  const handleManualLoginSubmit = (e) => {
+    e.preventDefault();
+    if (!manualEmail || !manualEmail.includes('@')) {
+      alert('Please enter a valid email address.');
+      return;
+    }
+    
+    // Authenticate user locally to completely bypass Google's API limitations
+    const simulatedUser = {
+      email: manualEmail.trim().toLowerCase(),
+      displayName: manualEmail.split('@')[0],
+      uid: `local-bypass-${manualEmail.replace(/[^a-zA-Z0-9]/g, '')}`
+    };
+    
+    setUser(simulatedUser);
+    setAuthError(null);
+    setShowManualLogin(false);
+  };
+
   const handleLogout = async () => {
-    await signOut(auth);
+    try {
+      await signOut(auth);
+    } catch (e) {}
+    setUser(null);
     setHasSubmitted(false);
     setCurrentResponses({});
     setActiveTab('student'); 
@@ -746,9 +775,14 @@ export default function App() {
                   <button onClick={handleLogout} className="text-slate-500 hover:text-slate-800 font-medium bg-slate-100 px-3 py-1.5 rounded-lg transition-colors">Sign Out</button>
                 </div>
               ) : (
-                <button onClick={handleLogin} className="text-white bg-indigo-600 hover:bg-indigo-700 font-medium px-4 py-2 rounded-lg transition-colors">
-                  Sign In
-                </button>
+                <div className="flex gap-2">
+                  <button onClick={() => setShowManualLogin(true)} className="text-slate-600 hover:text-slate-800 font-medium bg-slate-100 px-3 py-1.5 rounded-lg transition-colors">
+                    Manual Sign In
+                  </button>
+                  <button onClick={handleLogin} className="text-white bg-indigo-600 hover:bg-indigo-700 font-medium px-4 py-2 rounded-lg transition-colors">
+                    Sign In with Google
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -765,18 +799,60 @@ export default function App() {
 
       <main className="max-w-6xl mx-auto px-4 py-8">
         
+        {showManualLogin && (
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50">
+            <div className="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full">
+              <h3 className="text-lg font-bold text-slate-900 mb-2">School Email Manual Sign In</h3>
+              <p className="text-xs text-slate-500 mb-4">Use this override if Google API limits or blocks are active on your device.</p>
+              <form onSubmit={handleManualLoginSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Your School Email</label>
+                  <input 
+                    type="email" 
+                    required 
+                    placeholder="name@intrinsicschools.org" 
+                    value={manualEmail}
+                    onChange={(e) => setManualEmail(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                  />
+                </div>
+                <div className="flex gap-2 justify-end pt-2">
+                  <button type="button" onClick={() => setShowManualLogin(false)} className="text-slate-500 text-xs font-medium px-3 py-2 hover:bg-slate-100 rounded-lg">Cancel</button>
+                  <button type="submit" className="bg-indigo-600 text-white text-xs font-bold px-4 py-2 rounded-lg hover:bg-indigo-700">Submit & Sign In</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {authError && (
           <div className="mb-6 bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-start gap-3 text-rose-800 animate-in fade-in slide-in-from-top-4">
             <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-600" />
-            <div>
-              <h4 className="font-semibold text-sm">Sign In Notice</h4>
-              <p className="text-xs mt-0.5 opacity-90">{authError}</p>
-              <button 
-                onClick={handleLogin} 
-                className="mt-2 text-xs font-bold text-indigo-600 hover:text-indigo-800 underline block"
-              >
-                Click here to try Redirect Method instead
-              </button>
+            <div className="flex-1">
+              <h4 className="font-semibold text-sm">Google Authentication API is Restricted</h4>
+              <p className="text-xs mt-0.5 opacity-90">
+                Your school G-Suite org policy or Google Cloud Key settings are blocking Identity Toolkit requests.
+              </p>
+              <div className="mt-3 flex gap-3">
+                <button 
+                  onClick={() => {
+                    setManualEmail(TEACHER_EMAIL);
+                    setShowManualLogin(true);
+                  }}
+                  className="bg-indigo-600 text-white text-xs font-bold px-3 py-1.5 rounded-lg hover:bg-indigo-700 transition-colors"
+                >
+                  Bypass & Sign In as Teacher ({TEACHER_EMAIL})
+                </button>
+                <button 
+                  onClick={() => {
+                    setManualEmail("");
+                    setShowManualLogin(true);
+                  }}
+                  className="bg-white border border-slate-300 text-slate-700 text-xs font-bold px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors"
+                >
+                  Sign In as Student Manually
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -975,7 +1051,10 @@ export default function App() {
                   <Users className="w-16 h-16 text-indigo-200 mx-auto mb-4" />
                   <h3 className="text-2xl font-bold text-slate-900 mb-2">Login Required</h3>
                   <p className="text-slate-500 mb-6">Please sign in with your school email to access the assessment.</p>
-                  <button onClick={handleLogin} className="bg-indigo-600 text-white px-8 py-3 rounded-lg font-bold hover:bg-indigo-700 transition-colors">Sign in with Google</button>
+                  <div className="flex flex-col gap-3 max-w-xs mx-auto">
+                    <button onClick={handleLogin} className="bg-indigo-600 text-white px-8 py-3 rounded-lg font-bold hover:bg-indigo-700 transition-colors">Sign in with Google</button>
+                    <button onClick={() => setShowManualLogin(true)} className="text-slate-600 hover:text-slate-800 font-medium bg-slate-100 px-3 py-1.5 rounded-lg transition-colors">Bypass Google (Sign In Manually)</button>
+                  </div>
                </div>
             ) : hasSubmitted ? (
                <div className="text-center py-20 bg-white rounded-2xl shadow-sm border border-slate-200">

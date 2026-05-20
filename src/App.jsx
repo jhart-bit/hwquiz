@@ -11,10 +11,7 @@ import { initializeApp } from "firebase/app";
 import { 
   getAuth, 
   onAuthStateChanged, 
-  GoogleAuthProvider, 
-  signInWithPopup, 
-  signInWithRedirect,
-  getRedirectResult,
+  signInAnonymously,
   signOut 
 } from "firebase/auth";
 import { getFirestore, collection, doc, setDoc, onSnapshot, addDoc, updateDoc } from "firebase/firestore";
@@ -36,6 +33,7 @@ const db = getFirestore(app);
 const appId = 'default-app-id';
 
 // --- API & Utility Functions ---
+// Safely evaluate environment variables dynamically to prevent target environment ES2015 compiler warnings
 let apiKey = "";
 try {
   apiKey = new Function("return import.meta.env.VITE_GEMINI_API_KEY")();
@@ -286,13 +284,20 @@ export default function App() {
   const TEACHER_EMAIL = "jhart@intrinsicschools.org"; 
 
   const [activeTab, setActiveTab] = useState('student');
-  const [user, setUser] = useState(null);
-  const [authError, setAuthError] = useState(null);
-  const [showManualLogin, setShowManualLogin] = useState(false);
-  const [manualEmail, setManualEmail] = useState('');
   
-  const isTeacher = user?.email === TEACHER_EMAIL;
+  // Real active user evaluates local school email state as precedence
+  const [activeUser, setActiveUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('math_grader_manual_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      return null;
+    }
+  });
 
+  const isTeacher = activeUser?.email === TEACHER_EMAIL;
+
+  const [manualEmail, setManualEmail] = useState('');
   const [questionsImages, setQuestionsImages] = useState([]);
   const [answerKeyText, setAnswerKeyText] = useState('');
   const [extractedQuestions, setExtractedQuestions] = useState([]);
@@ -315,29 +320,19 @@ export default function App() {
   const [reattempts, setReattempts] = useState({});
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      if (firebaseUser) {
-        setUser(firebaseUser);
+    // Silently sign in anonymously in the background on startup to establish database authorization
+    const initAuth = async () => {
+      try {
+        await signInAnonymously(auth);
+      } catch (err) {
+        console.warn("Database connection notice:", err.message);
       }
-    });
-
-    getRedirectResult(auth)
-      .then((result) => {
-        if (result?.user) {
-          setUser(result.user);
-          setAuthError(null);
-        }
-      })
-      .catch((error) => {
-        console.error("Redirect auth error:", error);
-        setAuthError(`Redirect login failed: ${error.message}`);
-      });
-
-    return () => unsubscribe();
+    };
+    initAuth();
   }, []);
 
   useEffect(() => {
-    if (!user) {
+    if (!activeUser) {
       setDbLoading(false);
       return;
     }
@@ -350,8 +345,6 @@ export default function App() {
         const data = docSnap.data() || {};
         setQuizConfig(data);
         setSetupPhase(4);
-        console.log('Quiz config loaded:', data);
-        console.log('Questions array:', data?.questions);
       }
     }, (err) => console.error("Config sync error:", err));
 
@@ -363,8 +356,8 @@ export default function App() {
       });
       setSubmissions(loaded);
       
-      if (user.email) {
-         const mySub = loaded.find(s => (s.studentEmail || "").toLowerCase() === user.email.toLowerCase());
+      if (activeUser?.email) {
+         const mySub = loaded.find(s => (s.studentEmail || "").toLowerCase() === activeUser.email.toLowerCase());
          if (mySub) setHasSubmitted(true);
       }
       setDbLoading(false);
@@ -373,7 +366,6 @@ export default function App() {
       setDbLoading(false);
     });
 
-    // Dynamic, strict path tracking for student permission overrides
     const reattemptsRef = doc(db, 'artifacts', appId, 'public', 'data', 'permissions', 'reattempts');
     const unsubReattempts = onSnapshot(reatattemptsRef, (docSnap) => {
       if (docSnap.exists && typeof docSnap.exists === 'function' && docSnap.exists()) {
@@ -384,47 +376,33 @@ export default function App() {
     }, (err) => console.error("Permissions lookup error:", err));
 
     return () => { unsubConfig(); unsubSubs(); unsubReattempts(); };
-  }, [user]);
+  }, [activeUser]);
 
-  const handleLogin = async () => {
-    setAuthError(null);
-    const provider = new GoogleAuthProvider();
-    
-    try {
-      await signInWithPopup(auth, provider);
-    } catch (popupError) {
-      console.warn("Popup blocked or closed, falling back to clean page redirect...", popupError);
-      try {
-        await signInWithRedirect(auth, provider);
-      } catch (redirectError) {
-        setAuthError(`Sign-in failed: ${redirectError.message}`);
-      }
-    }
-  };
-
-  const handleManualLoginSubmit = (e) => {
+  const handleManualLoginSubmit = async (e) => {
     e.preventDefault();
     if (!manualEmail || !manualEmail.includes('@')) {
-      alert('Please enter a valid email address.');
+      alert('Please enter a valid school email address.');
       return;
     }
-    
+
+    const email = manualEmail.trim().toLowerCase();
+
     const simulatedUser = {
-      email: manualEmail.trim().toLowerCase(),
-      displayName: manualEmail.split('@')[0],
-      uid: `local-bypass-${manualEmail.replace(/[^a-zA-Z0-9]/g, '')}`
+      email: email,
+      displayName: email.split('@')[0],
+      uid: auth.currentUser?.uid || `local-bypass-${email.replace(/[^a-zA-Z0-9]/g, '')}`
     };
     
-    setUser(simulatedUser);
-    setAuthError(null);
-    setShowManualLogin(false);
+    setActiveUser(simulatedUser);
+    localStorage.setItem('math_grader_manual_user', JSON.stringify(simulatedUser));
   };
 
   const handleLogout = async () => {
     try {
       await signOut(auth);
     } catch (e) {}
-    setUser(null);
+    setActiveUser(null);
+    localStorage.removeItem('math_grader_manual_user');
     setHasSubmitted(false);
     setCurrentResponses({});
     setStudentSelectedSubId(null);
@@ -609,15 +587,15 @@ export default function App() {
   };
 
   const handleStudentSubmit = async () => {
-    if (!user?.email) {
+    if (!activeUser?.email) {
       alert("Please sign in to submit your assessment.");
       return;
     }
 
     const newSubmission = {
-      studentEmail: user.email,
-      studentName: user.displayName || user.email.split('@')[0],
-      userId: user.uid,
+      studentEmail: activeUser.email,
+      studentName: activeUser.displayName || activeUser.email.split('@')[0],
+      userId: activeUser.uid,
       responses: { ...currentResponses },
       graded: false,
       results: null,
@@ -628,7 +606,7 @@ export default function App() {
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'submissions'), newSubmission);
       
       // Consume the granted extra attempt permission flag as soon as the student hits submit
-      const lowerEmail = user.email.toLowerCase();
+      const lowerEmail = activeUser.email.toLowerCase();
       if (reattempts && reattempts[lowerEmail]) {
         const reattemptsRef = doc(db, 'artifacts', appId, 'public', 'data', 'permissions', 'reattempts');
         await setDoc(reatattemptsRef, { [lowerEmail]: false }, { merge: true });
@@ -818,14 +796,14 @@ export default function App() {
 
   // Filter student submissions sorted by date descending to find the attempts log
   const studentAttempts = submissions
-    ?.filter(s => s && (s.studentEmail || "").toLowerCase() === (user?.email || "").toLowerCase())
+    ?.filter(s => s && (s.studentEmail || "").toLowerCase() === (activeUser?.email || "").toLowerCase())
     ?.sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp)) || [];
 
   // Determine which submission is currently being selected for viewing in the dashboard
   const activeStudentSub = studentAttempts?.find(s => s && s.id === studentSelectedSubId) || studentAttempts[0] || null;
 
   // Dynamic permission checks for students
-  const userLowerEmail = user?.email ? user.email.toLowerCase() : "";
+  const userLowerEmail = activeUser?.email ? activeUser.email.toLowerCase() : "";
   const extraAttemptAuthorized = reattempts && reattempts[userLowerEmail] === true;
 
   return (
@@ -841,19 +819,10 @@ export default function App() {
             </div>
             
             <div className="flex items-center gap-4 text-sm">
-              {user?.email ? (
+              {activeUser?.email && (
                 <div className="flex items-center gap-3">
-                  <span className="text-slate-600 font-medium hidden sm:inline-block">{user.email}</span>
+                  <span className="text-slate-600 font-medium hidden sm:inline-block">{activeUser.email}</span>
                   <button onClick={handleLogout} className="text-slate-500 hover:text-slate-800 font-medium bg-slate-100 px-3 py-1.5 rounded-lg transition-colors">Sign Out</button>
-                </div>
-              ) : (
-                <div className="flex gap-2">
-                  <button onClick={() => setShowManualLogin(true)} className="text-slate-600 hover:text-slate-800 font-medium bg-slate-100 px-3 py-1.5 rounded-lg transition-colors">
-                    Manual Sign In
-                  </button>
-                  <button onClick={handleLogin} className="text-white bg-indigo-600 hover:bg-indigo-700 font-medium px-4 py-2 rounded-lg transition-colors">
-                    Sign In with Google
-                  </button>
                 </div>
               )}
             </div>
@@ -871,60 +840,37 @@ export default function App() {
 
       <main className="max-w-6xl mx-auto px-4 py-8">
         
-        {showManualLogin && (
-          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full">
-              <h3 className="text-lg font-bold text-slate-900 mb-2">School Email Manual Sign In</h3>
-              <p className="text-xs text-slate-500 mb-4">Use this override if Google API limits or blocks are active on your device.</p>
+        {!activeUser?.email && (
+          <div className="max-w-md mx-auto mt-12">
+            <div className="bg-white rounded-2xl shadow-xl border border-slate-200 p-8">
+              <div className="text-center mb-6">
+                <div className="inline-flex p-3.5 bg-indigo-50 text-indigo-600 rounded-2xl mb-4">
+                  <GraduationCap className="w-8 h-8" />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-900">Sign In to Math Grader</h2>
+                <p className="text-sm text-slate-500 mt-1">Please enter your school email address to begin.</p>
+              </div>
+
               <form onSubmit={handleManualLoginSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Your School Email</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">School Email</label>
                   <input 
                     type="email" 
                     required 
                     placeholder="name@intrinsicschools.org" 
                     value={manualEmail}
                     onChange={(e) => setManualEmail(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                    className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all bg-slate-50/50"
                   />
                 </div>
-                <div className="flex gap-2 justify-end pt-2">
-                  <button type="button" onClick={() => setShowManualLogin(false)} className="text-slate-500 text-xs font-medium px-3 py-2 hover:bg-slate-100 rounded-lg">Cancel</button>
-                  <button type="submit" className="bg-indigo-600 text-white text-xs font-bold px-4 py-2 rounded-lg hover:bg-indigo-700">Submit & Sign In</button>
-                </div>
+                
+                <button 
+                  type="submit" 
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl transition-all shadow-md text-sm mt-2"
+                >
+                  Continue
+                </button>
               </form>
-            </div>
-          </div>
-        )}
-
-        {authError && (
-          <div className="mb-6 bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-start gap-3 text-rose-800 animate-in fade-in slide-in-from-top-4">
-            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-600" />
-            <div className="flex-1">
-              <h4 className="font-semibold text-sm">Google Authentication API is Restricted</h4>
-              <p className="text-xs mt-0.5 opacity-90">
-                Your school G-Suite org policy or Google Cloud Key settings are blocking Identity Toolkit requests.
-              </p>
-              <div className="mt-3 flex gap-3">
-                <button 
-                  onClick={() => {
-                    setManualEmail(TEACHER_EMAIL);
-                    setShowManualLogin(true);
-                  }}
-                  className="bg-indigo-600 text-white text-xs font-bold px-3 py-1.5 rounded-lg hover:bg-indigo-700 transition-colors"
-                >
-                  Bypass & Sign In as Teacher ({TEACHER_EMAIL})
-                </button>
-                <button 
-                  onClick={() => {
-                    setManualEmail("");
-                    setShowManualLogin(true);
-                  }}
-                  className="bg-white border border-slate-300 text-slate-700 text-xs font-bold px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors"
-                >
-                  Sign In as Student Manually
-                </button>
-              </div>
             </div>
           </div>
         )}
@@ -939,14 +885,14 @@ export default function App() {
           </div>
         )}
 
-        {dbLoading && (
+        {activeUser?.email && dbLoading && (
           <div className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl shadow-sm border border-slate-200">
             <Loader2 className="w-10 h-10 text-indigo-600 animate-spin mb-4" />
             <p className="text-sm text-slate-500 font-medium">Synchronizing with cloud databases...</p>
           </div>
         )}
 
-        {!dbLoading && isTeacher && activeTab === 'setup' && (
+        {!dbLoading && activeUser?.email && isTeacher && activeTab === 'setup' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="p-6 border-b border-slate-100 bg-slate-50/50">
@@ -1115,28 +1061,14 @@ export default function App() {
           </div>
         )}
 
-        {!dbLoading && activeTab === 'student' && (
+        {!dbLoading && activeUser?.email && activeTab === 'student' && (
           <div className="max-w-4xl mx-auto animate-in fade-in duration-500">
             {!quizConfig || !quizConfig.questions || !Array.isArray(quizConfig.questions) ? (
               <div className="text-center py-20 bg-white rounded-2xl shadow-sm border border-slate-200">
                 <BookOpen className="w-12 h-12 text-slate-300 mx-auto mb-4" />
                 <h3 className="text-lg font-medium text-slate-900">No Active Quiz</h3>
-                {!user?.email ? (
-                  <p className="text-slate-500 mt-2">Sign in to check for active assessments.</p>
-                ) : (
-                  <p className="text-slate-500 mt-2">No quiz is currently published by the teacher.</p>
-                )}
+                <p className="text-slate-500 mt-2">No quiz is currently published by the teacher.</p>
               </div>
-            ) : !user?.email ? (
-               <div className="text-center py-20 bg-white rounded-2xl shadow-sm border border-slate-200">
-                  <Users className="w-16 h-16 text-indigo-200 mx-auto mb-4" />
-                  <h3 className="text-2xl font-bold text-slate-900 mb-2">Login Required</h3>
-                  <p className="text-slate-500 mb-6">Please sign in with your school email to access the assessment.</p>
-                  <div className="flex flex-col gap-3 max-w-xs mx-auto">
-                    <button onClick={handleLogin} className="bg-indigo-600 text-white px-8 py-3 rounded-lg font-bold hover:bg-indigo-700 transition-colors">Sign in with Google</button>
-                    <button onClick={() => setShowManualLogin(true)} className="text-slate-600 hover:text-slate-800 font-medium bg-slate-100 px-3 py-1.5 rounded-lg transition-colors">Bypass Google (Sign In Manually)</button>
-                  </div>
-               </div>
             ) : (hasSubmitted && !extraAttemptAuthorized) && activeStudentSub ? (
                /* --- ARCHIVAL PORTFOLIO VIEW --- */
                <div className="space-y-6">
@@ -1147,11 +1079,10 @@ export default function App() {
                      </div>
                      <div>
                        <h2 className="text-xl font-extrabold text-slate-900">Assessment Submissions</h2>
-                       <p className="text-sm text-slate-500 mt-1">Hello, <span className="font-semibold text-slate-700">{user.email}</span>. Browse your archival work and detailed scores below.</p>
+                       <p className="text-sm text-slate-500 mt-1">Hello, <span className="font-semibold text-slate-700">{activeUser.email}</span>. Browse your archival work and detailed scores below.</p>
                      </div>
                    </div>
                    
-                   {/* Normal student state has NO button to submission unless explicit teacher waiver override active */}
                    <div className="text-xs font-semibold text-slate-400 bg-slate-100 border border-slate-200 px-4 py-3 rounded-xl max-w-xs leading-relaxed text-center">
                      Submission locked. Contact your teacher if you require an additional attempt.
                    </div>
@@ -1339,7 +1270,7 @@ export default function App() {
                   <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                     <div className="p-6 border-b border-slate-100 bg-indigo-600 text-white">
                       <h2 className="text-2xl font-bold">Math Assessment</h2>
-                      <p className="text-indigo-100 text-sm mt-1">Logged in as: {user?.email}</p>
+                      <p className="text-indigo-100 text-sm mt-1">Logged in as: {activeUser?.email}</p>
                     </div>
                     
                     <div className="p-6 md:p-8 space-y-10">
@@ -1398,7 +1329,11 @@ export default function App() {
                     <h3 className="text-lg font-bold text-slate-900">Submission History Loaded</h3>
                     <p className="text-sm text-slate-500 mt-2">Checking portfolio data...</p>
                     <button 
-                      onClick={() => setStudentSelectedSubId(studentAttempts[0]?.id)}
+                      onClick={() => {
+                        if (studentAttempts[0]?.id) {
+                          setStudentSelectedSubId(studentAttempts[0].id);
+                        }
+                      }}
                       className="mt-4 bg-indigo-600 text-white text-xs font-bold px-4 py-2 rounded-xl"
                     >
                       View Submission History
@@ -1410,7 +1345,7 @@ export default function App() {
           </div>
         )}
 
-        {!dbLoading && isTeacher && activeTab === 'results' && (
+        {!dbLoading && activeUser?.email && isTeacher && activeTab === 'results' && (
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
               <div>

@@ -36,7 +36,6 @@ const db = getFirestore(app);
 const appId = 'default-app-id';
 
 // --- API & Utility Functions ---
-// Safely evaluate environment variables dynamically to prevent target environment ES2015 compiler warnings
 let apiKey = "";
 try {
   apiKey = new Function("return import.meta.env.VITE_GEMINI_API_KEY")();
@@ -128,7 +127,7 @@ const extractTextFromPDF = async (file) => {
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    text += content.items.map(item => item.str).join(" ") + "\n";
+    text += (content?.items || [])?.map(item => item?.str || '')?.join(" ") + "\n";
   }
   return text;
 };
@@ -307,6 +306,7 @@ export default function App() {
   const [submissions, setSubmissions] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStatus, setProcessingStatus] = useState('');
+  const [dbLoading, setDbLoading] = useState(true);
   
   // Track selected submission ID for student portfolio view
   const [studentSelectedSubId, setStudentSelectedSubId] = useState(null);
@@ -337,13 +337,21 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setDbLoading(false);
+      return;
+    }
     
+    setDbLoading(true);
+
     const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'main');
     const unsubConfig = onSnapshot(configRef, (docSnap) => {
       if (docSnap.exists && typeof docSnap.exists === 'function' && docSnap.exists()) {
-        setQuizConfig(docSnap.data());
+        const data = docSnap.data() || {};
+        setQuizConfig(data);
         setSetupPhase(4);
+        console.log('Quiz config loaded:', data);
+        console.log('Questions array:', data?.questions);
       }
     }, (err) => console.error("Config sync error:", err));
 
@@ -359,7 +367,11 @@ export default function App() {
          const mySub = loaded.find(s => (s.studentEmail || "").toLowerCase() === user.email.toLowerCase());
          if (mySub) setHasSubmitted(true);
       }
-    }, (err) => console.error("Submissions sync error:", err));
+      setDbLoading(false);
+    }, (err) => {
+      console.error("Submissions sync error:", err);
+      setDbLoading(false);
+    });
 
     // Dynamic, strict path tracking for student permission overrides
     const reattemptsRef = doc(db, 'artifacts', appId, 'public', 'data', 'permissions', 'reattempts');
@@ -528,7 +540,7 @@ export default function App() {
 
       const result = await callGemini(prompt, schema, questionsImages);
       
-      const sanitizedQuestions = await Promise.all((result.questions || []).map(async q => {
+      const sanitizedQuestions = await Promise.all((result?.questions || []).map(async q => {
         let finalQ = { ...q };
         if (!finalQ.parts || finalQ.parts.length === 0) {
            finalQ.parts = [{ id: `${q.id}-p1`, label: '', text: 'Provide your answer below:' }];
@@ -559,25 +571,25 @@ export default function App() {
     if (exists) {
       setSelectedQuestions(selectedQuestions.filter(sq => sq.id !== q.id));
     } else {
-      const partsWithConfig = (q.parts || []).map(p => ({
+      const partsWithConfig = (q?.parts || [])?.map(p => ({
         ...p,
         maxPoints: 5,
         rubric: '1 pt for correct formula.\n3 pts for clear working steps.\n1 pt for the correct final answer.'
-      }));
+      })) || [];
       setSelectedQuestions([...selectedQuestions, { ...q, parts: partsWithConfig }]);
     }
   };
 
   const updatePartConfig = (questionId, partId, field, value) => {
-    setSelectedQuestions(selectedQuestions.map(q => {
+    setSelectedQuestions(selectedQuestions?.map(q => {
       if (q.id === questionId) {
         return {
           ...q,
-          parts: (q.parts || []).map(p => p.id === partId ? { ...p, [field]: value } : p)
+          parts: (q?.parts || [])?.map(p => p.id === partId ? { ...p, [field]: value } : p) || []
         };
       }
       return q;
-    }));
+    }) || []);
   };
 
   const finalizeSetup = async () => {
@@ -646,7 +658,7 @@ export default function App() {
   };
 
   const gradeAllSubmissions = async () => {
-    const ungraded = submissions.filter(s => s && !s.graded);
+    const ungraded = submissions?.filter(s => s && !s.graded) || [];
     if (ungraded.length === 0) return;
 
     setIsProcessing(true);
@@ -662,7 +674,7 @@ export default function App() {
 
       const targetQuestions = quizConfig?.questions || [];
       for (const q of targetQuestions) {
-        const targetParts = q.parts || [];
+        const targetParts = q?.parts || [];
         for (const p of targetParts) {
           const studentHtml = (sub.responses && sub.responses[p.id]) || "";
           const parsedStudentText = parseStudentHtmlToText(studentHtml);
@@ -737,7 +749,7 @@ export default function App() {
 
     const headers = ['Student Name', 'Email'];
     targetQuestions.forEach((q, i) => {
-      const targetParts = q.parts || [];
+      const targetParts = q?.parts || [];
       targetParts.forEach(p => {
         const prefix = p.label ? `Q${i+1}${p.label}` : `Q${i+1}`;
         headers.push(`${prefix} Score (Max ${p.maxPoints})`);
@@ -756,7 +768,7 @@ export default function App() {
       const row = [`"${sub.studentName || "Student"}"`, `"${sub.studentEmail || ""}"`];
       
       targetQuestions.forEach(q => {
-        const targetParts = q.parts || [];
+        const targetParts = q?.parts || [];
         targetParts.forEach(p => {
            const res = sub.results?.itemized?.[p.id];
            row.push(res ? res.score : 0);
@@ -806,11 +818,11 @@ export default function App() {
 
   // Filter student submissions sorted by date descending to find the attempts log
   const studentAttempts = submissions
-    .filter(s => s && (s.studentEmail || "").toLowerCase() === (user?.email || "").toLowerCase())
-    .sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp));
+    ?.filter(s => s && (s.studentEmail || "").toLowerCase() === (user?.email || "").toLowerCase())
+    ?.sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp)) || [];
 
   // Determine which submission is currently being selected for viewing in the dashboard
-  const activeStudentSub = studentAttempts.find(s => s && s.id === studentSelectedSubId) || studentAttempts[0];
+  const activeStudentSub = studentAttempts?.find(s => s && s.id === studentSelectedSubId) || studentAttempts[0] || null;
 
   // Dynamic permission checks for students
   const userLowerEmail = user?.email ? user.email.toLowerCase() : "";
@@ -927,7 +939,14 @@ export default function App() {
           </div>
         )}
 
-        {isTeacher && activeTab === 'setup' && (
+        {dbLoading && (
+          <div className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl shadow-sm border border-slate-200">
+            <Loader2 className="w-10 h-10 text-indigo-600 animate-spin mb-4" />
+            <p className="text-sm text-slate-500 font-medium">Synchronizing with cloud databases...</p>
+          </div>
+        )}
+
+        {!dbLoading && isTeacher && activeTab === 'setup' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="p-6 border-b border-slate-100 bg-slate-50/50">
@@ -976,8 +995,8 @@ export default function App() {
                     </div>
 
                     <div className="space-y-4">
-                      {extractedQuestions.map((q, idx) => {
-                        const isSelected = selectedQuestions.some(sq => sq.id === q.id);
+                      {extractedQuestions?.map((q, idx) => {
+                        const isSelected = selectedQuestions?.some(sq => sq.id === q.id) || false;
                         return (
                           <div 
                             key={q.id}
@@ -1030,7 +1049,7 @@ export default function App() {
                   <div className="space-y-8">
                     <p className="text-sm text-slate-600 mb-6">Define the rubrics for <strong>each individual part</strong> of the selected questions.</p>
 
-                    {selectedQuestions.map((q, idx) => (
+                    {selectedQuestions?.map((q, idx) => (
                       <div key={q.id} className="bg-white rounded-xl border border-slate-300 overflow-hidden">
                         <div className="bg-slate-100 px-5 py-3 border-b border-slate-200">
                            <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider block mb-1">Question {idx + 1}</span>
@@ -1096,14 +1115,16 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === 'student' && (
+        {!dbLoading && activeTab === 'student' && (
           <div className="max-w-4xl mx-auto animate-in fade-in duration-500">
-            {!quizConfig ? (
+            {!quizConfig || !quizConfig.questions || !Array.isArray(quizConfig.questions) ? (
               <div className="text-center py-20 bg-white rounded-2xl shadow-sm border border-slate-200">
                 <BookOpen className="w-12 h-12 text-slate-300 mx-auto mb-4" />
                 <h3 className="text-lg font-medium text-slate-900">No Active Quiz</h3>
-                {!user?.email && (
+                {!user?.email ? (
                   <p className="text-slate-500 mt-2">Sign in to check for active assessments.</p>
+                ) : (
+                  <p className="text-slate-500 mt-2">No quiz is currently published by the teacher.</p>
                 )}
               </div>
             ) : !user?.email ? (
@@ -1143,7 +1164,7 @@ export default function App() {
                        <Clock className="w-3.5 h-3.5" /> Attempts History
                      </span>
                      <div className="space-y-2">
-                       {studentAttempts.map((attempt, index) => {
+                       {studentAttempts?.map((attempt, index) => {
                          const attemptNum = studentAttempts.length - index;
                          const isSelected = activeStudentSub && activeStudentSub.id === attempt.id;
                          return (
@@ -1160,9 +1181,9 @@ export default function App() {
                                <span className={`text-xs font-bold ${isSelected ? 'text-indigo-700' : 'text-slate-700'}`}>
                                  Attempt #{attemptNum}
                                </span>
-                               {attempt.graded ? (
+                               {attempt?.graded ? (
                                  <span className="text-[10px] font-extrabold text-emerald-600 uppercase bg-emerald-50 px-1.5 py-0.5 rounded">
-                                   {attempt.results?.percentage}%
+                                   {attempt.results?.percentage || 0}%
                                  </span>
                                ) : (
                                  <span className="text-[10px] font-extrabold text-amber-600 uppercase bg-amber-50 px-1.5 py-0.5 rounded">
@@ -1175,7 +1196,7 @@ export default function App() {
                              </span>
                            </button>
                          );
-                       })}
+                       }) || <div className="text-xs text-slate-400 italic">No previous attempts loaded.</div>}
                      </div>
                    </div>
 
@@ -1212,7 +1233,7 @@ export default function App() {
 
                      {/* Itemized reviews list */}
                      <div className="space-y-6">
-                       {(quizConfig?.questions || []).map((q, qIdx) => (
+                       {(quizConfig?.questions || [])?.map((q, qIdx) => (
                          <div key={q.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                            <div className="p-5 border-b border-slate-100 bg-slate-50/50">
                              <div className="flex gap-3">
@@ -1229,7 +1250,7 @@ export default function App() {
                            </div>
 
                            <div className="p-5 space-y-6 divide-y divide-slate-100">
-                             {(q.parts || []).map((p) => {
+                             {(q?.parts || [])?.map((p) => {
                                const studentHtml = (activeStudentSub?.responses && activeStudentSub.responses[p.id]) || "";
                                const gradeResult = activeStudentSub?.results?.itemized?.[p.id];
                                
@@ -1282,7 +1303,7 @@ export default function App() {
                                    </div>
                                  </div>
                                );
-                             })}
+                             }) || <div className="text-xs text-slate-400 italic">No parts configured for this question.</div>}
                            </div>
                         </div>
                        ))}
@@ -1323,7 +1344,7 @@ export default function App() {
                     
                     <div className="p-6 md:p-8 space-y-10">
                       <div className="space-y-12">
-                        {(quizConfig?.questions || []).map((q, idx) => (
+                        {(quizConfig?.questions || [])?.map((q, idx) => (
                           <div key={q.id} className="space-y-6">
                             <div className="flex gap-3">
                               <span className="text-indigo-600 shrink-0 font-semibold text-xl">{idx + 1}.</span>
@@ -1338,7 +1359,7 @@ export default function App() {
                             </div>
                             
                             <div className="pl-6 md:pl-8 space-y-8 border-l-2 border-indigo-50">
-                              {(q.parts || []).map((p) => (
+                              {(q?.parts || [])?.map((p) => (
                                 <div key={p.id} className="space-y-3">
                                   <div className="flex justify-between items-end mb-2">
                                     {p.label && (
@@ -1357,7 +1378,7 @@ export default function App() {
                                     onChange={(htmlVal) => setCurrentResponses({...currentResponses, [p.id]: htmlVal})}
                                   />
                                 </div>
-                              ))}
+                              )) || <div className="text-xs text-slate-400 italic">No parts configured.</div>}
                             </div>
                           </div>
                         ))}
@@ -1389,25 +1410,25 @@ export default function App() {
           </div>
         )}
 
-        {isTeacher && activeTab === 'results' && (
+        {!dbLoading && isTeacher && activeTab === 'results' && (
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
               <div>
                 <h2 className="text-xl font-bold text-slate-900">Submissions & Grading</h2>
-                <p className="text-slate-500 text-sm mt-1">{submissions.length} total responses recorded.</p>
+                <p className="text-slate-500 text-sm mt-1">{submissions?.length || 0} total responses recorded.</p>
               </div>
               <div className="flex gap-3">
-                <button onClick={gradeAllSubmissions} disabled={submissions.filter(s => !s.graded).length === 0} className="bg-indigo-600 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 disabled:opacity-50">
+                <button onClick={gradeAllSubmissions} disabled={submissions?.filter(s => s && !s.graded)?.length === 0} className="bg-indigo-600 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 disabled:opacity-50">
                   <Play className="w-4 h-4 fill-current" /> Auto-Grade Pending
                 </button>
-                <button onClick={exportCSV} disabled={submissions.filter(s => s.graded).length === 0} className="bg-white border border-slate-300 text-slate-700 px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 disabled:opacity-50">
+                <button onClick={exportCSV} disabled={submissions?.filter(s => s && s.graded)?.length === 0} className="bg-white border border-slate-300 text-slate-700 px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 disabled:opacity-50">
                   <Download className="w-4 h-4" /> Export CSV
                 </button>
               </div>
             </div>
 
             <div className="grid gap-6">
-              {submissions.map((sub) => {
+              {submissions?.map((sub) => {
                 if (!sub) return null;
                 const subLowerEmail = (sub.studentEmail || "").toLowerCase();
                 const activeExtraAttempt = reattempts && reattempts[subLowerEmail] === true;
@@ -1461,7 +1482,7 @@ export default function App() {
 
                     {sub.graded && (
                       <div className="p-5 space-y-8">
-                        {(quizConfig?.questions || []).map((q, qIdx) => (
+                        {(quizConfig?.questions || [])?.map((q, qIdx) => (
                           <div key={q.id}>
                              <div className="text-sm font-semibold text-slate-800 mb-3 bg-slate-100 p-3 rounded-lg border border-slate-200">
                                <div className="flex items-start gap-2">
@@ -1474,7 +1495,7 @@ export default function App() {
                              </div>
                              
                              <div className="space-y-4 pl-4">
-                               {(q.parts || []).map(p => {
+                               {(q?.parts || [])?.map(p => {
                                  const gradeResult = sub.results?.itemized?.[p.id];
                                  const studentHtml = (sub.responses && sub.responses[p.id]) || "";
                                  
@@ -1508,7 +1529,7 @@ export default function App() {
                                      </div>
                                    </div>
                                  )
-                               })}
+                               }) || <div className="text-xs text-slate-400 italic">No parts evaluated.</div>}
                              </div>
                           </div>
                         ))}
@@ -1516,7 +1537,7 @@ export default function App() {
                     )}
                   </div>
                 );
-              })}
+              }) || <div className="text-sm text-slate-500 italic text-center py-10">No submissions loaded yet.</div>}
             </div>
           </div>
         )}

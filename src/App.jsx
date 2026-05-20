@@ -3,7 +3,8 @@ import {
   UploadCloud, BookOpen, CheckSquare, Settings, 
   Users, CheckCircle, Download, FileText, AlertCircle,
   Loader2, Calculator, Play, ChevronRight, GraduationCap,
-  Sigma, Type, Image as ImageIcon
+  Sigma, Type, Image as ImageIcon, History, Award, Clock,
+  RefreshCw, RotateCcw
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -35,7 +36,6 @@ const db = getFirestore(app);
 const appId = 'default-app-id';
 
 // --- API & Utility Functions ---
-// Safely evaluate environment variables dynamically to prevent target environment ES2015 compiler warnings
 let apiKey = "";
 try {
   apiKey = new Function("return import.meta.env.VITE_GEMINI_API_KEY")();
@@ -306,16 +306,20 @@ export default function App() {
   const [submissions, setSubmissions] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStatus, setProcessingStatus] = useState('');
+  
+  // Track selected submission ID for student portfolio view
+  const [studentSelectedSubId, setStudentSelectedSubId] = useState(null);
+
+  // Global document tracking extra attempts explicitly permitted by teacher
+  const [reattempts, setReattempts] = useState({});
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      // If we are logged in manually, do not override with null firebase user states
       if (firebaseUser) {
         setUser(firebaseUser);
       }
     });
 
-    // Capture the login result if the student was redirected back to the site
     getRedirectResult(auth)
       .then((result) => {
         if (result?.user) {
@@ -354,7 +358,17 @@ export default function App() {
       }
     }, (err) => console.error("Submissions sync error:", err));
 
-    return () => { unsubConfig(); unsubSubs(); };
+    // Dynamic, strict path tracking for student permission overrides
+    const reattemptsRef = doc(db, 'artifacts', appId, 'public', 'data', 'permissions', 'reattempts');
+    const unsubReattempts = onSnapshot(reatattemptsRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setReattempts(docSnap.data());
+      } else {
+        setReattempts({});
+      }
+    }, (err) => console.error("Permissions lookup error:", err));
+
+    return () => { unsubConfig(); unsubSubs(); unsubReattempts(); };
   }, [user]);
 
   const handleLogin = async () => {
@@ -362,12 +376,9 @@ export default function App() {
     const provider = new GoogleAuthProvider();
     
     try {
-      // Step 1: Attempt normal popup login
       await signInWithPopup(auth, provider);
     } catch (popupError) {
       console.warn("Popup blocked or closed, falling back to clean page redirect...", popupError);
-      
-      // Step 2: Fallback to Redirect Sign In immediately (100% bypasses third-party cookie blocks)
       try {
         await signInWithRedirect(auth, provider);
       } catch (redirectError) {
@@ -383,7 +394,6 @@ export default function App() {
       return;
     }
     
-    // Authenticate user locally to completely bypass Google's API limitations
     const simulatedUser = {
       email: manualEmail.trim().toLowerCase(),
       displayName: manualEmail.split('@')[0],
@@ -402,6 +412,7 @@ export default function App() {
     setUser(null);
     setHasSubmitted(false);
     setCurrentResponses({});
+    setStudentSelectedSubId(null);
     setActiveTab('student'); 
   };
 
@@ -414,7 +425,7 @@ export default function App() {
     document.body.appendChild(scriptPDF);
 
     window.MathJax = {
-      tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
+      text: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
       startup: { typeset: false }
     };
     const scriptMathJax = document.createElement('script');
@@ -600,6 +611,14 @@ export default function App() {
 
     try {
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'submissions'), newSubmission);
+      
+      // Consume the granted extra attempt permission flag as soon as the student hits submit
+      const lowerEmail = user.email.toLowerCase();
+      if (reattempts[lowerEmail]) {
+        const reattemptsRef = doc(db, 'artifacts', appId, 'public', 'data', 'permissions', 'reattempts');
+        await setDoc(reatattemptsRef, { [lowerEmail]: false }, { merge: true });
+      }
+
       setHasSubmitted(true);
     } catch (err) {
       console.error("Error submitting:", err);
@@ -610,6 +629,17 @@ export default function App() {
   const resetStudentPortal = () => {
     setCurrentResponses({});
     setHasSubmitted(false);
+    setStudentSelectedSubId(null);
+  };
+
+  const grantExtraAttempt = async (studentEmail, status) => {
+    try {
+      const reattemptsRef = doc(db, 'artifacts', appId, 'public', 'data', 'permissions', 'reattempts');
+      await setDoc(reatattemptsRef, { [studentEmail.toLowerCase()]: status }, { merge: true });
+    } catch (err) {
+      console.error("Error updating permissions:", err);
+      alert("Failed to update extra attempt permissions.");
+    }
   };
 
   const gradeAllSubmissions = async () => {
@@ -755,6 +785,18 @@ export default function App() {
       <span className="ml-2">{label}</span>
     </button>
   );
+
+  // Filter student submissions sorted by date descending to find the attempts log
+  const studentAttempts = submissions
+    .filter(s => s.studentEmail === user?.email)
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+  // Determine which submission is currently being selected for viewing in the dashboard
+  const activeStudentSub = studentAttempts.find(s => s.id === studentSelectedSubId) || studentAttempts[0];
+
+  // Dynamic permission checks for students
+  const userLowerEmail = user?.email ? user.email.toLowerCase() : "";
+  const extraAttemptAuthorized = reattempts[userLowerEmail] === true;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
@@ -1037,7 +1079,7 @@ export default function App() {
         )}
 
         {activeTab === 'student' && (
-          <div className="max-w-3xl mx-auto animate-in fade-in duration-500">
+          <div className="max-w-4xl mx-auto animate-in fade-in duration-500">
             {!quizConfig ? (
               <div className="text-center py-20 bg-white rounded-2xl shadow-sm border border-slate-200">
                 <BookOpen className="w-12 h-12 text-slate-300 mx-auto mb-4" />
@@ -1056,67 +1098,274 @@ export default function App() {
                     <button onClick={() => setShowManualLogin(true)} className="text-slate-600 hover:text-slate-800 font-medium bg-slate-100 px-3 py-1.5 rounded-lg transition-colors">Bypass Google (Sign In Manually)</button>
                   </div>
                </div>
-            ) : hasSubmitted ? (
-               <div className="text-center py-20 bg-white rounded-2xl shadow-sm border border-slate-200">
-                  <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4"><CheckCircle className="w-8 h-8" /></div>
-                  <h3 className="text-2xl font-bold text-slate-900 mb-2">Submission Received</h3>
-                  <button onClick={resetStudentPortal} className="mt-4 text-indigo-600 font-medium hover:underline">Submit another response</button>
+            ) : (hasSubmitted && !extraAttemptAuthorized) && activeStudentSub ? (
+               /* --- ARCHIVAL PORTFOLIO VIEW --- */
+               <div className="space-y-6">
+                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden p-6 flex flex-col md:flex-row md:items-center justify-between gap-6">
+                   <div className="flex items-start gap-4">
+                     <div className="p-3 bg-indigo-50 rounded-xl text-indigo-600 shrink-0">
+                       <History className="w-6 h-6" />
+                     </div>
+                     <div>
+                       <h2 className="text-xl font-extrabold text-slate-900">Assessment Submissions</h2>
+                       <p className="text-sm text-slate-500 mt-1">Hello, <span className="font-semibold text-slate-700">{user.email}</span>. Browse your archival work and detailed scores below.</p>
+                     </div>
+                   </div>
+                   
+                   {/* Normal student state has NO button to submission unless explicit teacher waiver override active */}
+                   <div className="text-xs font-semibold text-slate-400 bg-slate-100 border border-slate-200 px-4 py-3 rounded-xl max-w-xs leading-relaxed text-center">
+                     Submission locked. Contact your teacher if you require an additional attempt.
+                   </div>
+                 </div>
+
+                 <div className="grid md:grid-cols-4 gap-6">
+                   {/* Left Column: List of attempts */}
+                   <div className="md:col-span-1 space-y-3">
+                     <span className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-1 flex items-center gap-1.5">
+                       <Clock className="w-3.5 h-3.5" /> Attempts History
+                     </span>
+                     <div className="space-y-2">
+                       {studentAttempts.map((attempt, index) => {
+                         const attemptNum = studentAttempts.length - index;
+                         const isSelected = activeStudentSub.id === attempt.id;
+                         return (
+                           <button
+                             key={attempt.id}
+                             onClick={() => setStudentSelectedSubId(attempt.id)}
+                             className={`w-full text-left p-3.5 rounded-xl border transition-all ${
+                               isSelected 
+                                 ? 'bg-indigo-50 border-indigo-300 ring-2 ring-indigo-600/10' 
+                                 : 'bg-white border-slate-200 hover:border-indigo-200 hover:bg-slate-50'
+                             }`}
+                           >
+                             <div className="flex justify-between items-center mb-1">
+                               <span className={`text-xs font-bold ${isSelected ? 'text-indigo-700' : 'text-slate-700'}`}>
+                                 Attempt #{attemptNum}
+                               </span>
+                               {attempt.graded ? (
+                                 <span className="text-[10px] font-extrabold text-emerald-600 uppercase bg-emerald-50 px-1.5 py-0.5 rounded">
+                                   {attempt.results.percentage}%
+                                 </span>
+                               ) : (
+                                 <span className="text-[10px] font-extrabold text-amber-600 uppercase bg-amber-50 px-1.5 py-0.5 rounded">
+                                   Pending
+                                 </span>
+                               )}
+                             </div>
+                             <span className="text-[10px] text-slate-400 block">
+                               {new Date(attempt.timestamp).toLocaleDateString()} at {new Date(attempt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                             </span>
+                           </button>
+                         );
+                       })}
+                     </div>
+                   </div>
+
+                   {/* Right Column: Active submission details */}
+                   <div className="md:col-span-3 space-y-6">
+                     {/* Score Panel Card */}
+                     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 overflow-hidden relative">
+                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                         <div>
+                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Active Record</span>
+                           <h3 className="text-lg font-bold text-slate-900">
+                             Submitted on {new Date(activeStudentSub.timestamp).toLocaleDateString()} at {new Date(activeStudentSub.timestamp).toLocaleTimeString()}
+                           </h3>
+                         </div>
+                         {activeStudentSub.graded ? (
+                           <div className="flex items-center gap-4 bg-emerald-50/50 border border-emerald-100 p-4 rounded-xl shrink-0">
+                             <Award className="w-10 h-10 text-emerald-600" />
+                             <div>
+                               <div className="text-2xl font-black text-emerald-700 leading-none">{activeStudentSub.results.percentage}%</div>
+                               <div className="text-xs font-medium text-slate-500 mt-1">{activeStudentSub.results.totalScore} / {activeStudentSub.results.totalMax} Points</div>
+                             </div>
+                           </div>
+                         ) : (
+                           <div className="flex items-center gap-3 bg-amber-50/50 border border-amber-100 p-4 rounded-xl shrink-0">
+                             <Loader2 className="w-6 h-6 text-amber-600 animate-spin" />
+                             <div>
+                               <div className="text-sm font-bold text-amber-800">Pending Evaluation</div>
+                               <div className="text-xs text-amber-700/80 mt-0.5">Your teacher will process grading shortly</div>
+                             </div>
+                           </div>
+                         )}
+                       </div>
+                     </div>
+
+                     {/* Itemized reviews list */}
+                     <div className="space-y-6">
+                       {quizConfig.questions.map((q, qIdx) => (
+                         <div key={q.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                           <div className="p-5 border-b border-slate-100 bg-slate-50/50">
+                             <div className="flex gap-3">
+                               <span className="text-indigo-600 shrink-0 font-bold text-lg">Q{qIdx + 1}.</span>
+                               <div className="flex-1">
+                                 {q.imageUrl && (
+                                   <div className="mb-4">
+                                     <img src={q.imageUrl} alt="Question Figure" className="max-h-40 border border-slate-200 rounded object-contain bg-white" />
+                                   </div>
+                                 )}
+                                 <MathText text={q.text} className="font-bold text-slate-800 text-lg" />
+                               </div>
+                             </div>
+                           </div>
+
+                           <div className="p-5 space-y-6 divide-y divide-slate-100">
+                             {q.parts.map((p) => {
+                               const studentHtml = activeStudentSub.responses[p.id] || "";
+                               const gradeResult = activeStudentSub.results?.itemized?.[p.id];
+                               
+                               return (
+                                 <div key={p.id} className="pt-5 first:pt-0 space-y-4">
+                                   <div className="flex justify-between items-center">
+                                     {p.label ? (
+                                       <span className="font-bold text-slate-700 flex gap-2">
+                                         <span className="text-indigo-600">{p.label})</span>
+                                         <MathText text={p.text} />
+                                       </span>
+                                     ) : (
+                                       <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Your Working Steps</span>
+                                     )}
+                                     <span className="text-xs text-slate-400 font-bold uppercase tracking-widest bg-slate-100 px-2 py-1 rounded">
+                                       Max {p.maxPoints} pts
+                                     </span>
+                                   </div>
+
+                                   <div className="grid md:grid-cols-2 gap-4">
+                                     {/* Student written working */}
+                                     <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/30">
+                                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">My Answer</span>
+                                       {studentHtml ? (
+                                         <div 
+                                           className="text-sm text-slate-800 leading-relaxed pointer-events-none" 
+                                           dangerouslySetInnerHTML={{ __html: studentHtml }} 
+                                         />
+                                       ) : (
+                                         <span className="italic text-slate-400 text-sm">No response recorded for this part.</span>
+                                       )}
+                                     </div>
+
+                                     {/* AI Grade and Feedback */}
+                                     <div className={`border rounded-xl p-4 ${activeStudentSub.graded ? 'bg-indigo-50/15 border-indigo-100' : 'bg-slate-50 border-slate-200'}`}>
+                                       <div className="flex items-center justify-between mb-2">
+                                         <span className="text-[10px] font-bold text-indigo-800 uppercase tracking-widest block">AI Review</span>
+                                         {activeStudentSub.graded && gradeResult && (
+                                           <span className={`text-sm font-black ${gradeResult.score === Number(p.maxPoints) ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                             {gradeResult.score} / {p.maxPoints} pts
+                                           </span>
+                                         )}
+                                       </div>
+                                       {activeStudentSub.graded && gradeResult ? (
+                                         <p className="text-sm text-slate-700 leading-relaxed">{gradeResult.feedback}</p>
+                                       ) : (
+                                         <p className="text-xs italic text-slate-400">Feedback will appear here instantly when auto-grading has completed.</p>
+                                       )}
+                                     </div>
+                                   </div>
+                                 </div>
+                               );
+                             })}
+                           </div>
+                        </div>
+                       ))}
+                     </div>
+                   </div>
+                 </div>
                </div>
             ) : (
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="p-6 border-b border-slate-100 bg-indigo-600 text-white">
-                  <h2 className="text-2xl font-bold">Math Assessment</h2>
-                  <p className="text-indigo-100 text-sm mt-1">Logged in as: {user.email}</p>
-                </div>
-                
-                <div className="p-6 md:p-8 space-y-10">
-                  <div className="space-y-12">
-                    {quizConfig.questions.map((q, idx) => (
-                      <div key={q.id} className="space-y-6">
-                        <div className="flex gap-3">
-                          <span className="text-indigo-600 shrink-0 font-semibold text-xl">{idx + 1}.</span>
-                          <div className="flex-1">
-                            {q.imageUrl && (
-                              <div className="mb-4">
-                                <img src={q.imageUrl} alt="Question Figure" className="max-h-64 border border-slate-200 rounded shadow-sm object-contain bg-white" />
-                              </div>
-                            )}
-                            <MathText text={q.text} className="font-semibold text-slate-900 text-xl" />
-                          </div>
-                        </div>
-                        
-                        <div className="pl-6 md:pl-8 space-y-8 border-l-2 border-indigo-50">
-                          {q.parts.map((p) => (
-                            <div key={p.id} className="space-y-3">
-                              <div className="flex justify-between items-end mb-2">
-                                {p.label && (
-                                  <span className="font-bold text-slate-700 flex gap-2">
-                                    <span className="text-indigo-600">{p.label})</span>
-                                    <MathText text={p.text} />
-                                  </span>
-                                )}
-                                <span className="shrink-0 text-slate-400 text-xs font-bold uppercase tracking-widest bg-slate-100 px-2 py-1 rounded">
-                                  {p.maxPoints} pts
-                                </span>
-                              </div>
-                              
-                              <HybridEditor 
-                                value={currentResponses[p.id] || ''}
-                                onChange={(htmlVal) => setCurrentResponses({...currentResponses, [p.id]: htmlVal})}
-                              />
-                            </div>
-                          ))}
-                        </div>
+              /* --- EXAM WORKING PORTAL --- */
+              <div className="space-y-6">
+                {/* Notice Banner showing that they have an extra attempt active */}
+                {extraAttemptAuthorized && hasSubmitted && (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5 flex items-center justify-between gap-4 animate-in fade-in">
+                    <div className="flex items-center gap-3">
+                      <div className="bg-emerald-100 p-2 rounded-xl text-emerald-700">
+                        <RotateCcw className="w-5 h-5" />
                       </div>
-                    ))}
-                  </div>
-
-                  <div className="pt-6">
-                    <button onClick={handleStudentSubmit} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold text-lg shadow-md hover:bg-indigo-700 transition-colors">
-                      Submit Assessment
+                      <div>
+                        <h4 className="font-bold text-sm text-emerald-900">Waiver Active: Re-Attempt Granted!</h4>
+                        <p className="text-xs text-emerald-800 mt-0.5">Your teacher has unlocked an extra submission block for this quiz.</p>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={resetStudentPortal}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-sm flex items-center gap-1.5"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" /> Start Attempt #{studentAttempts.length + 1}
                     </button>
                   </div>
-                </div>
+                )}
+
+                {(!hasSubmitted || (extraAttemptAuthorized && !hasSubmitted)) ? (
+                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                    <div className="p-6 border-b border-slate-100 bg-indigo-600 text-white">
+                      <h2 className="text-2xl font-bold">Math Assessment</h2>
+                      <p className="text-indigo-100 text-sm mt-1">Logged in as: {user.email}</p>
+                    </div>
+                    
+                    <div className="p-6 md:p-8 space-y-10">
+                      <div className="space-y-12">
+                        {quizConfig.questions.map((q, idx) => (
+                          <div key={q.id} className="space-y-6">
+                            <div className="flex gap-3">
+                              <span className="text-indigo-600 shrink-0 font-semibold text-xl">{idx + 1}.</span>
+                              <div className="flex-1">
+                                {q.imageUrl && (
+                                  <div className="mb-4">
+                                    <img src={q.imageUrl} alt="Question Figure" className="max-h-64 border border-slate-200 rounded shadow-sm object-contain bg-white" />
+                                  </div>
+                                )}
+                                <MathText text={q.text} className="font-semibold text-slate-900 text-xl" />
+                              </div>
+                            </div>
+                            
+                            <div className="pl-6 md:pl-8 space-y-8 border-l-2 border-indigo-50">
+                              {q.parts.map((p) => (
+                                <div key={p.id} className="space-y-3">
+                                  <div className="flex justify-between items-end mb-2">
+                                    {p.label && (
+                                      <span className="font-bold text-slate-700 flex gap-2">
+                                        <span className="text-indigo-600">{p.label})</span>
+                                        <MathText text={p.text} />
+                                      </span>
+                                    )}
+                                    <span className="shrink-0 text-slate-400 text-xs font-bold uppercase tracking-widest bg-slate-100 px-2 py-1 rounded">
+                                      {p.maxPoints} pts
+                                    </span>
+                                  </div>
+                                  
+                                  <HybridEditor 
+                                    value={currentResponses[p.id] || ''}
+                                    onChange={(htmlVal) => setCurrentResponses({...currentResponses, [p.id]: htmlVal})}
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="pt-6">
+                        <button onClick={handleStudentSubmit} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold text-lg shadow-md hover:bg-indigo-700 transition-colors">
+                          Submit Assessment
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* Show archival portfolio screen as base if they have submitted and no active waiver is checked */
+                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 text-center">
+                    <History className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+                    <h3 className="text-lg font-bold text-slate-900">Submission History Loaded</h3>
+                    <p className="text-sm text-slate-500 mt-2">Checking portfolio data...</p>
+                    <button 
+                      onClick={() => setStudentSelectedSubId(studentAttempts[0]?.id)}
+                      className="mt-4 bg-indigo-600 text-white text-xs font-bold px-4 py-2 rounded-xl"
+                    >
+                      View Submission History
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1140,83 +1389,113 @@ export default function App() {
             </div>
 
             <div className="grid gap-6">
-              {submissions.map((sub) => (
-                <div key={sub.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                  <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold">
-                        {sub.studentName.charAt(0).toUpperCase()}
+              {submissions.map((sub) => {
+                const subLowerEmail = sub.studentEmail.toLowerCase();
+                const activeExtraAttempt = reattempts[subLowerEmail] === true;
+
+                return (
+                  <div key={sub.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50 gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold">
+                          {sub.studentName.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-slate-900">{sub.studentName}</h3>
+                          <p className="text-xs text-slate-500">{sub.studentEmail}</p>
+                        </div>
                       </div>
-                      <div>
-                        <h3 className="font-bold text-slate-900">{sub.studentName}</h3>
-                        <p className="text-xs text-slate-500">{sub.studentEmail}</p>
+
+                      <div className="flex items-center gap-4 self-end sm:self-auto">
+                        {/* Interactive waiver re-attempt lock controls */}
+                        <div className="border-r border-slate-200 pr-4 flex items-center gap-2">
+                          {activeExtraAttempt ? (
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-semibold text-emerald-700 bg-emerald-100/60 px-2.5 py-1 rounded-lg">Extra Attempt Active</span>
+                              <button 
+                                onClick={() => grantExtraAttempt(sub.studentEmail, false)}
+                                className="text-xs font-semibold text-rose-600 hover:text-rose-800 hover:underline"
+                              >
+                                Revoke
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => grantExtraAttempt(sub.studentEmail, true)}
+                              className="text-xs font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100/80 px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" /> Grant Re-Attempt
+                            </button>
+                          )}
+                        </div>
+
+                        {sub.graded ? (
+                          <div className="text-right shrink-0">
+                            <div className="text-2xl font-black text-indigo-600">{sub.results.percentage}%</div>
+                            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{sub.results.totalScore} / {sub.results.totalMax} pts</div>
+                          </div>
+                        ) : (
+                          <span className="bg-amber-100 text-amber-800 text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1"><AlertCircle className="w-3 h-3" /> Pending</span>
+                        )}
                       </div>
                     </div>
-                    {sub.graded ? (
-                      <div className="text-right">
-                        <div className="text-2xl font-black text-indigo-600">{sub.results.percentage}%</div>
-                        <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{sub.results.totalScore} / {sub.results.totalMax} pts</div>
-                      </div>
-                    ) : (
-                      <span className="bg-amber-100 text-amber-800 text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1"><AlertCircle className="w-3 h-3" /> Pending</span>
-                    )}
-                  </div>
 
-                  {sub.graded && (
-                    <div className="p-5 space-y-8">
-                      {quizConfig?.questions.map((q, qIdx) => (
-                        <div key={q.id}>
-                           <div className="text-sm font-semibold text-slate-800 mb-3 bg-slate-100 p-3 rounded-lg border border-slate-200">
-                             <div className="flex items-start gap-2">
-                               <span className="shrink-0 text-slate-500">Q{qIdx + 1}:</span> 
-                               <div>
-                                 {q.imageUrl && <img src={q.imageUrl} alt="Figure" className="max-h-32 mb-2 border border-slate-200 rounded bg-white object-contain" />}
-                                 <MathText text={q.text} className="inline-block" />
+                    {sub.graded && (
+                      <div className="p-5 space-y-8">
+                        {quizConfig?.questions.map((q, qIdx) => (
+                          <div key={q.id}>
+                             <div className="text-sm font-semibold text-slate-800 mb-3 bg-slate-100 p-3 rounded-lg border border-slate-200">
+                               <div className="flex items-start gap-2">
+                                 <span className="shrink-0 text-slate-500">Q{qIdx + 1}:</span> 
+                                 <div>
+                                   {q.imageUrl && <img src={q.imageUrl} alt="Figure" className="max-h-32 mb-2 border border-slate-200 rounded bg-white object-contain" />}
+                                   <MathText text={q.text} className="inline-block" />
+                                 </div>
                                </div>
                              </div>
-                           </div>
-                           
-                           <div className="space-y-4 pl-4">
-                             {q.parts.map(p => {
-                               const gradeResult = sub.results.itemized[p.id];
-                               const studentHtml = sub.responses[p.id] || "";
-                               
-                               return (
-                                 <div key={p.id} className="border border-slate-200 rounded-xl overflow-hidden grid md:grid-cols-2">
-                                   <div className="p-4 border-b md:border-b-0 md:border-r border-slate-200">
-                                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2 block">
-                                        Student Answer {p.label ? `(Part ${p.label})` : ''}
-                                      </span>
-                                      {studentHtml ? (
-                                        <div 
-                                          className="text-sm text-slate-800 leading-relaxed pointer-events-none" 
-                                          dangerouslySetInnerHTML={{ __html: studentHtml }} 
-                                        />
-                                      ) : (
-                                        <span className="italic text-slate-400 text-sm">No response.</span>
-                                      )}
-                                   </div>
-                                   <div className="bg-indigo-50/30 p-4">
-                                      <div className="flex items-center justify-between mb-2">
-                                        <span className="text-[10px] font-bold text-indigo-800 uppercase tracking-wider">AI Evaluation</span>
-                                        <span className={`text-sm font-black ${gradeResult.score === Number(p.maxPoints) ? 'text-emerald-600' : 'text-amber-600'}`}>
-                                          {gradeResult.score} / {p.maxPoints} pts
+                             
+                             <div className="space-y-4 pl-4">
+                               {q.parts.map(p => {
+                                 const gradeResult = sub.results.itemized[p.id];
+                                 const studentHtml = sub.responses[p.id] || "";
+                                 
+                                 return (
+                                   <div key={p.id} className="border border-slate-200 rounded-xl overflow-hidden grid md:grid-cols-2">
+                                     <div className="p-4 border-b md:border-b-0 md:border-r border-slate-200">
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2 block">
+                                          Student Answer {p.label ? `(Part ${p.label})` : ''}
                                         </span>
-                                      </div>
-                                      <p className="text-sm text-indigo-900/80 leading-relaxed">
-                                        {gradeResult.feedback}
-                                      </p>
+                                        {studentHtml ? (
+                                          <div 
+                                            className="text-sm text-slate-800 leading-relaxed pointer-events-none" 
+                                            dangerouslySetInnerHTML={{ __html: studentHtml }} 
+                                          />
+                                        ) : (
+                                          <span className="italic text-slate-400 text-sm">No response.</span>
+                                        )}
+                                     </div>
+                                     <div className="bg-indigo-50/30 p-4">
+                                        <div className="flex items-center justify-between mb-2">
+                                          <span className="text-[10px] font-bold text-indigo-800 uppercase tracking-wider">AI Evaluation</span>
+                                          <span className={`text-sm font-black ${gradeResult.score === Number(p.maxPoints) ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                            {gradeResult.score} / {p.maxPoints} pts
+                                          </span>
+                                        </div>
+                                        <p className="text-sm text-indigo-900/80 leading-relaxed">
+                                          {gradeResult.feedback}
+                                        </p>
+                                     </div>
                                    </div>
-                                 </div>
-                               )
-                             })}
-                           </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
+                                 )
+                               })}
+                             </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

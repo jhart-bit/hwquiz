@@ -36,6 +36,7 @@ const db = getFirestore(app);
 const appId = 'default-app-id';
 
 // --- API & Utility Functions ---
+// Safely evaluate environment variables dynamically to prevent target environment ES2015 compiler warnings
 let apiKey = "";
 try {
   apiKey = new Function("return import.meta.env.VITE_GEMINI_API_KEY")();
@@ -353,7 +354,7 @@ export default function App() {
       setSubmissions(loaded);
       
       if (user.email) {
-         const mySub = loaded.find(s => s.studentEmail === user.email);
+         const mySub = loaded.find(s => (s.studentEmail || "").toLowerCase() === user.email.toLowerCase());
          if (mySub) setHasSubmitted(true);
       }
     }, (err) => console.error("Submissions sync error:", err));
@@ -425,7 +426,7 @@ export default function App() {
     document.body.appendChild(scriptPDF);
 
     window.MathJax = {
-      text: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
+      tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
       startup: { typeset: false }
     };
     const scriptMathJax = document.createElement('script');
@@ -658,7 +659,7 @@ export default function App() {
 
       for (const q of quizConfig.questions) {
         for (const p of q.parts) {
-          const studentHtml = sub.responses[p.id] || "";
+          const studentHtml = (sub.responses && sub.responses[p.id]) || "";
           const parsedStudentText = parseStudentHtmlToText(studentHtml);
           totalMax += Number(p.maxPoints);
 
@@ -749,15 +750,15 @@ export default function App() {
       
       quizConfig.questions.forEach(q => {
         q.parts.forEach(p => {
-           const res = sub.results.itemized[p.id];
+           const res = sub.results?.itemized?.[p.id];
            row.push(res ? res.score : 0);
            row.push(`"${(res ? res.feedback : '').replace(/"/g, '""')}"`);
         });
       });
 
-      row.push(sub.results.totalScore);
-      row.push(sub.results.totalMax);
-      row.push(`${sub.results.percentage}%`);
+      row.push(sub.results?.totalScore || 0);
+      row.push(sub.results?.totalMax || 0);
+      row.push(`${sub.results?.percentage || 0}%`);
 
       csvContent += row.join(',') + '\n';
     });
@@ -788,8 +789,8 @@ export default function App() {
 
   // Filter student submissions sorted by date descending to find the attempts log
   const studentAttempts = submissions
-    .filter(s => s.studentEmail === user?.email)
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    .filter(s => (s.studentEmail || "").toLowerCase() === (user?.email || "").toLowerCase())
+    .sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
 
   // Determine which submission is currently being selected for viewing in the dashboard
   const activeStudentSub = studentAttempts.find(s => s.id === studentSelectedSubId) || studentAttempts[0];
@@ -1144,7 +1145,7 @@ export default function App() {
                                </span>
                                {attempt.graded ? (
                                  <span className="text-[10px] font-extrabold text-emerald-600 uppercase bg-emerald-50 px-1.5 py-0.5 rounded">
-                                   {attempt.results.percentage}%
+                                   {attempt.results?.percentage}%
                                  </span>
                                ) : (
                                  <span className="text-[10px] font-extrabold text-amber-600 uppercase bg-amber-50 px-1.5 py-0.5 rounded">
@@ -1153,7 +1154,7 @@ export default function App() {
                                )}
                              </div>
                              <span className="text-[10px] text-slate-400 block">
-                               {new Date(attempt.timestamp).toLocaleDateString()} at {new Date(attempt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                               {new Date(attempt.timestamp || 0).toLocaleDateString()} at {new Date(attempt.timestamp || 0).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                              </span>
                            </button>
                          );
@@ -1169,15 +1170,15 @@ export default function App() {
                          <div>
                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Active Record</span>
                            <h3 className="text-lg font-bold text-slate-900">
-                             Submitted on {new Date(activeStudentSub.timestamp).toLocaleDateString()} at {new Date(activeStudentSub.timestamp).toLocaleTimeString()}
+                             Submitted on {new Date(activeStudentSub.timestamp || 0).toLocaleDateString()} at {new Date(activeStudentSub.timestamp || 0).toLocaleTimeString()}
                            </h3>
                          </div>
                          {activeStudentSub.graded ? (
                            <div className="flex items-center gap-4 bg-emerald-50/50 border border-emerald-100 p-4 rounded-xl shrink-0">
                              <Award className="w-10 h-10 text-emerald-600" />
                              <div>
-                               <div className="text-2xl font-black text-emerald-700 leading-none">{activeStudentSub.results.percentage}%</div>
-                               <div className="text-xs font-medium text-slate-500 mt-1">{activeStudentSub.results.totalScore} / {activeStudentSub.results.totalMax} Points</div>
+                               <div className="text-2xl font-black text-emerald-700 leading-none">{activeStudentSub.results?.percentage}%</div>
+                               <div className="text-xs font-medium text-slate-500 mt-1">{activeStudentSub.results?.totalScore} / {activeStudentSub.results?.totalMax} Points</div>
                              </div>
                            </div>
                          ) : (
@@ -1212,8 +1213,8 @@ export default function App() {
 
                            <div className="p-5 space-y-6 divide-y divide-slate-100">
                              {q.parts.map((p) => {
-                               const studentHtml = activeStudentSub.responses[p.id] || "";
-                               const gradeResult = activeStudentSub.results?.itemized?.[p.id];
+                               const studentHtml = (activeStudentSub?.responses && activeStudentSub.responses[p.id]) || "";
+                               const gradeResult = activeStudentSub?.results?.itemized?.[p.id];
                                
                                return (
                                  <div key={p.id} className="pt-5 first:pt-0 space-y-4">
@@ -1300,7 +1301,7 @@ export default function App() {
                   <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                     <div className="p-6 border-b border-slate-100 bg-indigo-600 text-white">
                       <h2 className="text-2xl font-bold">Math Assessment</h2>
-                      <p className="text-indigo-100 text-sm mt-1">Logged in as: {user.email}</p>
+                      <p className="text-indigo-100 text-sm mt-1">Logged in as: {user?.email}</p>
                     </div>
                     
                     <div className="p-6 md:p-8 space-y-10">
@@ -1390,7 +1391,7 @@ export default function App() {
 
             <div className="grid gap-6">
               {submissions.map((sub) => {
-                const subLowerEmail = sub.studentEmail.toLowerCase();
+                const subLowerEmail = (sub.studentEmail || "").toLowerCase();
                 const activeExtraAttempt = reattempts[subLowerEmail] === true;
 
                 return (
@@ -1398,10 +1399,10 @@ export default function App() {
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50 gap-4">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold">
-                          {sub.studentName.charAt(0).toUpperCase()}
+                          {sub.studentName ? sub.studentName.charAt(0).toUpperCase() : "S"}
                         </div>
                         <div>
-                          <h3 className="font-bold text-slate-900">{sub.studentName}</h3>
+                          <h3 className="font-bold text-slate-900">{sub.studentName || "Student"}</h3>
                           <p className="text-xs text-slate-500">{sub.studentEmail}</p>
                         </div>
                       </div>
@@ -1431,8 +1432,8 @@ export default function App() {
 
                         {sub.graded ? (
                           <div className="text-right shrink-0">
-                            <div className="text-2xl font-black text-indigo-600">{sub.results.percentage}%</div>
-                            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{sub.results.totalScore} / {sub.results.totalMax} pts</div>
+                            <div className="text-2xl font-black text-indigo-600">{sub.results?.percentage || 0}%</div>
+                            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{sub.results?.totalScore || 0} / {sub.results?.totalMax || 0} pts</div>
                           </div>
                         ) : (
                           <span className="bg-amber-100 text-amber-800 text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1"><AlertCircle className="w-3 h-3" /> Pending</span>
@@ -1456,8 +1457,8 @@ export default function App() {
                              
                              <div className="space-y-4 pl-4">
                                {q.parts.map(p => {
-                                 const gradeResult = sub.results.itemized[p.id];
-                                 const studentHtml = sub.responses[p.id] || "";
+                                 const gradeResult = sub.results?.itemized?.[p.id];
+                                 const studentHtml = (sub.responses && sub.responses[p.id]) || "";
                                  
                                  return (
                                    <div key={p.id} className="border border-slate-200 rounded-xl overflow-hidden grid md:grid-cols-2">
@@ -1477,12 +1478,14 @@ export default function App() {
                                      <div className="bg-indigo-50/30 p-4">
                                         <div className="flex items-center justify-between mb-2">
                                           <span className="text-[10px] font-bold text-indigo-800 uppercase tracking-wider">AI Evaluation</span>
-                                          <span className={`text-sm font-black ${gradeResult.score === Number(p.maxPoints) ? 'text-emerald-600' : 'text-amber-600'}`}>
-                                            {gradeResult.score} / {p.maxPoints} pts
-                                          </span>
+                                          {gradeResult && (
+                                            <span className={`text-sm font-black ${gradeResult.score === Number(p.maxPoints) ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                              {gradeResult.score} / {p.maxPoints} pts
+                                            </span>
+                                          )}
                                         </div>
                                         <p className="text-sm text-indigo-900/80 leading-relaxed">
-                                          {gradeResult.feedback}
+                                          {gradeResult?.feedback || "No feedback provided."}
                                         </p>
                                      </div>
                                    </div>

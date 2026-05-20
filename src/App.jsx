@@ -203,7 +203,7 @@ const MathText = ({ text, className }) => {
     return () => { isCancelled = true; clearInterval(interval); };
   }, [text]);
 
-  return <div ref={containerRef} className={className} style={{ whiteSpace: 'pre-wrap' }}>{text}</div>;
+  return <div ref={containerRef} className={className} style={{ whiteSpace: 'pre-wrap' }}>{text || ""}</div>;
 };
 
 const HybridEditor = ({ value, onChange }) => {
@@ -350,7 +350,11 @@ export default function App() {
     const subsRef = collection(db, 'artifacts', appId, 'public', 'data', 'submissions');
     const unsubSubs = onSnapshot(subsRef, (snap) => {
       const loaded = [];
-      snap.forEach(d => loaded.push({ id: d.id, ...d.data() }));
+      snap.forEach(d => {
+        if (d.exists()) {
+          loaded.push({ id: d.id, ...d.data() });
+        }
+      });
       setSubmissions(loaded);
       
       if (user.email) {
@@ -557,7 +561,7 @@ export default function App() {
     if (exists) {
       setSelectedQuestions(selectedQuestions.filter(sq => sq.id !== q.id));
     } else {
-      const partsWithConfig = q.parts.map(p => ({
+      const partsWithConfig = (q.parts || []).map(p => ({
         ...p,
         maxPoints: 5,
         rubric: '1 pt for correct formula.\n3 pts for clear working steps.\n1 pt for the correct final answer.'
@@ -571,7 +575,7 @@ export default function App() {
       if (q.id === questionId) {
         return {
           ...q,
-          parts: q.parts.map(p => p.id === partId ? { ...p, [field]: value } : p)
+          parts: (q.parts || []).map(p => p.id === partId ? { ...p, [field]: value } : p)
         };
       }
       return q;
@@ -657,8 +661,10 @@ export default function App() {
       let totalMax = 0;
       let itemizedResults = {};
 
-      for (const q of quizConfig.questions) {
-        for (const p of q.parts) {
+      const targetQuestions = quizConfig?.questions || [];
+      for (const q of targetQuestions) {
+        const targetParts = q.parts || [];
+        for (const p of targetParts) {
           const studentHtml = (sub.responses && sub.responses[p.id]) || "";
           const parsedStudentText = parseStudentHtmlToText(studentHtml);
           totalMax += Number(p.maxPoints);
@@ -673,7 +679,7 @@ export default function App() {
             Rubric Breakdown: ${p.rubric}
             
             Teacher's Answer Key Context (Use this to find the correct answer, but compensate using your expertise if the key is brief or incomplete):
-            ${quizConfig.answerKey}
+            ${quizConfig?.answerKey || ""}
             
             Student's Written Explanation & Mathematical Answer:
             "${parsedStudentText}"
@@ -727,11 +733,13 @@ export default function App() {
   };
 
   const exportCSV = () => {
-    if (!quizConfig || submissions.length === 0) return;
+    const targetQuestions = quizConfig?.questions || [];
+    if (targetQuestions.length === 0 || submissions.length === 0) return;
 
     const headers = ['Student Name', 'Email'];
-    quizConfig.questions.forEach((q, i) => {
-      q.parts.forEach(p => {
+    targetQuestions.forEach((q, i) => {
+      const targetParts = q.parts || [];
+      targetParts.forEach(p => {
         const prefix = p.label ? `Q${i+1}${p.label}` : `Q${i+1}`;
         headers.push(`${prefix} Score (Max ${p.maxPoints})`);
         headers.push(`${prefix} Feedback`);
@@ -744,12 +752,13 @@ export default function App() {
     let csvContent = headers.join(',') + '\n';
 
     submissions.forEach(sub => {
-      if (!sub.graded) return;
+      if (!sub || !sub.graded) return;
       
-      const row = [`"${sub.studentName}"`, `"${sub.studentEmail}"`];
+      const row = [`"${sub.studentName || "Student"}"`, `"${sub.studentEmail || ""}"`];
       
-      quizConfig.questions.forEach(q => {
-        q.parts.forEach(p => {
+      targetQuestions.forEach(q => {
+        const targetParts = q.parts || [];
+        targetParts.forEach(p => {
            const res = sub.results?.itemized?.[p.id];
            row.push(res ? res.score : 0);
            row.push(`"${(res ? res.feedback : '').replace(/"/g, '""')}"`);
@@ -789,11 +798,11 @@ export default function App() {
 
   // Filter student submissions sorted by date descending to find the attempts log
   const studentAttempts = submissions
-    .filter(s => (s.studentEmail || "").toLowerCase() === (user?.email || "").toLowerCase())
+    .filter(s => s && (s.studentEmail || "").toLowerCase() === (user?.email || "").toLowerCase())
     .sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
 
   // Determine which submission is currently being selected for viewing in the dashboard
-  const activeStudentSub = studentAttempts.find(s => s.id === studentSelectedSubId) || studentAttempts[0];
+  const activeStudentSub = studentAttempts.find(s => s && s.id === studentSelectedSubId) || studentAttempts[0];
 
   // Dynamic permission checks for students
   const userLowerEmail = user?.email ? user.email.toLowerCase() : "";
@@ -985,7 +994,7 @@ export default function App() {
                                 
                                 {q.parts && q.parts.length > 0 && q.parts[0].label !== '' && (
                                   <div className="pl-4 border-l-2 border-slate-200 space-y-2 mt-2">
-                                    {q.parts.map(p => (
+                                    {(q.parts || []).map(p => (
                                       <div key={p.id} className="text-sm flex gap-2">
                                         <strong className="text-indigo-600">{p.label})</strong>
                                         <MathText text={p.text} className="text-slate-600" />
@@ -1024,7 +1033,7 @@ export default function App() {
                         </div>
                         
                         <div className="divide-y divide-slate-100">
-                          {q.parts.map((p, pIdx) => (
+                          {(q.parts || []).map((p, pIdx) => (
                             <div key={p.id} className="p-5 flex flex-col md:flex-row gap-6">
                               <div className="md:w-1/3">
                                 {p.label ? (
@@ -1195,7 +1204,7 @@ export default function App() {
 
                      {/* Itemized reviews list */}
                      <div className="space-y-6">
-                       {quizConfig.questions.map((q, qIdx) => (
+                       {(quizConfig?.questions || []).map((q, qIdx) => (
                          <div key={q.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                            <div className="p-5 border-b border-slate-100 bg-slate-50/50">
                              <div className="flex gap-3">
@@ -1212,7 +1221,7 @@ export default function App() {
                            </div>
 
                            <div className="p-5 space-y-6 divide-y divide-slate-100">
-                             {q.parts.map((p) => {
+                             {(q.parts || []).map((p) => {
                                const studentHtml = (activeStudentSub?.responses && activeStudentSub.responses[p.id]) || "";
                                const gradeResult = activeStudentSub?.results?.itemized?.[p.id];
                                
@@ -1306,7 +1315,7 @@ export default function App() {
                     
                     <div className="p-6 md:p-8 space-y-10">
                       <div className="space-y-12">
-                        {quizConfig.questions.map((q, idx) => (
+                        {(quizConfig?.questions || []).map((q, idx) => (
                           <div key={q.id} className="space-y-6">
                             <div className="flex gap-3">
                               <span className="text-indigo-600 shrink-0 font-semibold text-xl">{idx + 1}.</span>
@@ -1321,7 +1330,7 @@ export default function App() {
                             </div>
                             
                             <div className="pl-6 md:pl-8 space-y-8 border-l-2 border-indigo-50">
-                              {q.parts.map((p) => (
+                              {(q.parts || []).map((p) => (
                                 <div key={p.id} className="space-y-3">
                                   <div className="flex justify-between items-end mb-2">
                                     {p.label && (
@@ -1391,6 +1400,7 @@ export default function App() {
 
             <div className="grid gap-6">
               {submissions.map((sub) => {
+                if (!sub) return null;
                 const subLowerEmail = (sub.studentEmail || "").toLowerCase();
                 const activeExtraAttempt = reattempts[subLowerEmail] === true;
 
@@ -1443,7 +1453,7 @@ export default function App() {
 
                     {sub.graded && (
                       <div className="p-5 space-y-8">
-                        {quizConfig?.questions.map((q, qIdx) => (
+                        {(quizConfig?.questions || []).map((q, qIdx) => (
                           <div key={q.id}>
                              <div className="text-sm font-semibold text-slate-800 mb-3 bg-slate-100 p-3 rounded-lg border border-slate-200">
                                <div className="flex items-start gap-2">
@@ -1456,7 +1466,7 @@ export default function App() {
                              </div>
                              
                              <div className="space-y-4 pl-4">
-                               {q.parts.map(p => {
+                               {(q.parts || []).map(p => {
                                  const gradeResult = sub.results?.itemized?.[p.id];
                                  const studentHtml = (sub.responses && sub.responses[p.id]) || "";
                                  

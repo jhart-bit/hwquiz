@@ -341,7 +341,7 @@ export default function App() {
     
     const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'main');
     const unsubConfig = onSnapshot(configRef, (docSnap) => {
-      if (docSnap.exists()) {
+      if (docSnap.exists && typeof docSnap.exists === 'function' && docSnap.exists()) {
         setQuizConfig(docSnap.data());
         setSetupPhase(4);
       }
@@ -351,9 +351,7 @@ export default function App() {
     const unsubSubs = onSnapshot(subsRef, (snap) => {
       const loaded = [];
       snap.forEach(d => {
-        if (d.exists()) {
-          loaded.push({ id: d.id, ...d.data() });
-        }
+        loaded.push({ id: d.id, ...d.data() });
       });
       setSubmissions(loaded);
       
@@ -366,8 +364,8 @@ export default function App() {
     // Dynamic, strict path tracking for student permission overrides
     const reattemptsRef = doc(db, 'artifacts', appId, 'public', 'data', 'permissions', 'reattempts');
     const unsubReattempts = onSnapshot(reatattemptsRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setReattempts(docSnap.data());
+      if (docSnap.exists && typeof docSnap.exists === 'function' && docSnap.exists()) {
+        setReattempts(docSnap.data() || {});
       } else {
         setReattempts({});
       }
@@ -619,7 +617,7 @@ export default function App() {
       
       // Consume the granted extra attempt permission flag as soon as the student hits submit
       const lowerEmail = user.email.toLowerCase();
-      if (reattempts[lowerEmail]) {
+      if (reattempts && reattempts[lowerEmail]) {
         const reattemptsRef = doc(db, 'artifacts', appId, 'public', 'data', 'permissions', 'reattempts');
         await setDoc(reatattemptsRef, { [lowerEmail]: false }, { merge: true });
       }
@@ -648,15 +646,16 @@ export default function App() {
   };
 
   const gradeAllSubmissions = async () => {
-    const ungraded = submissions.filter(s => !s.graded);
+    const ungraded = submissions.filter(s => s && !s.graded);
     if (ungraded.length === 0) return;
 
     setIsProcessing(true);
 
     for (let i = 0; i < ungraded.length; i++) {
       let sub = ungraded[i];
+      if (!sub) continue;
 
-      setProcessingStatus(`Grading submission for ${sub.studentName}...`);
+      setProcessingStatus(`Grading submission for ${sub.studentName || "Student"}...`);
       let totalScore = 0;
       let totalMax = 0;
       let itemizedResults = {};
@@ -796,17 +795,26 @@ export default function App() {
     </button>
   );
 
+  // Safely extract epoch timestamp values from various date representations
+  const getTimestampMs = (ts) => {
+    if (!ts) return 0;
+    if (typeof ts === 'string') return new Date(ts).getTime() || 0;
+    if (ts.seconds) return ts.seconds * 1000;
+    if (typeof ts.toDate === 'function') return ts.toDate().getTime() || 0;
+    return new Date(ts).getTime() || 0;
+  };
+
   // Filter student submissions sorted by date descending to find the attempts log
   const studentAttempts = submissions
     .filter(s => s && (s.studentEmail || "").toLowerCase() === (user?.email || "").toLowerCase())
-    .sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+    .sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp));
 
   // Determine which submission is currently being selected for viewing in the dashboard
   const activeStudentSub = studentAttempts.find(s => s && s.id === studentSelectedSubId) || studentAttempts[0];
 
   // Dynamic permission checks for students
   const userLowerEmail = user?.email ? user.email.toLowerCase() : "";
-  const extraAttemptAuthorized = reattempts[userLowerEmail] === true;
+  const extraAttemptAuthorized = reattempts && reattempts[userLowerEmail] === true;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
@@ -1137,7 +1145,7 @@ export default function App() {
                      <div className="space-y-2">
                        {studentAttempts.map((attempt, index) => {
                          const attemptNum = studentAttempts.length - index;
-                         const isSelected = activeStudentSub.id === attempt.id;
+                         const isSelected = activeStudentSub && activeStudentSub.id === attempt.id;
                          return (
                            <button
                              key={attempt.id}
@@ -1179,15 +1187,15 @@ export default function App() {
                          <div>
                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Active Record</span>
                            <h3 className="text-lg font-bold text-slate-900">
-                             Submitted on {new Date(activeStudentSub.timestamp || 0).toLocaleDateString()} at {new Date(activeStudentSub.timestamp || 0).toLocaleTimeString()}
+                             Submitted on {activeStudentSub?.timestamp ? new Date(activeStudentSub.timestamp).toLocaleDateString() : ""} at {activeStudentSub?.timestamp ? new Date(activeStudentSub.timestamp).toLocaleTimeString() : ""}
                            </h3>
                          </div>
-                         {activeStudentSub.graded ? (
+                         {activeStudentSub?.graded ? (
                            <div className="flex items-center gap-4 bg-emerald-50/50 border border-emerald-100 p-4 rounded-xl shrink-0">
                              <Award className="w-10 h-10 text-emerald-600" />
                              <div>
-                               <div className="text-2xl font-black text-emerald-700 leading-none">{activeStudentSub.results?.percentage}%</div>
-                               <div className="text-xs font-medium text-slate-500 mt-1">{activeStudentSub.results?.totalScore} / {activeStudentSub.results?.totalMax} Points</div>
+                               <div className="text-2xl font-black text-emerald-700 leading-none">{activeStudentSub?.results?.percentage || 0}%</div>
+                               <div className="text-xs font-medium text-slate-500 mt-1">{activeStudentSub?.results?.totalScore || 0} / {activeStudentSub?.results?.totalMax || 0} Points</div>
                              </div>
                            </div>
                          ) : (
@@ -1256,16 +1264,16 @@ export default function App() {
                                      </div>
 
                                      {/* AI Grade and Feedback */}
-                                     <div className={`border rounded-xl p-4 ${activeStudentSub.graded ? 'bg-indigo-50/15 border-indigo-100' : 'bg-slate-50 border-slate-200'}`}>
+                                     <div className={`border rounded-xl p-4 ${activeStudentSub?.graded ? 'bg-indigo-50/15 border-indigo-100' : 'bg-slate-50 border-slate-200'}`}>
                                        <div className="flex items-center justify-between mb-2">
                                          <span className="text-[10px] font-bold text-indigo-800 uppercase tracking-widest block">AI Review</span>
-                                         {activeStudentSub.graded && gradeResult && (
+                                         {activeStudentSub?.graded && gradeResult && (
                                            <span className={`text-sm font-black ${gradeResult.score === Number(p.maxPoints) ? 'text-emerald-600' : 'text-amber-600'}`}>
                                              {gradeResult.score} / {p.maxPoints} pts
                                            </span>
                                          )}
                                        </div>
-                                       {activeStudentSub.graded && gradeResult ? (
+                                       {activeStudentSub?.graded && gradeResult ? (
                                          <p className="text-sm text-slate-700 leading-relaxed">{gradeResult.feedback}</p>
                                        ) : (
                                          <p className="text-xs italic text-slate-400">Feedback will appear here instantly when auto-grading has completed.</p>
@@ -1402,7 +1410,7 @@ export default function App() {
               {submissions.map((sub) => {
                 if (!sub) return null;
                 const subLowerEmail = (sub.studentEmail || "").toLowerCase();
-                const activeExtraAttempt = reattempts[subLowerEmail] === true;
+                const activeExtraAttempt = reattempts && reattempts[subLowerEmail] === true;
 
                 return (
                   <div key={sub.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
